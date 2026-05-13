@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>99크러시</title>
+  </head>
+  <body>
+    <main id="shell">
+      <section id="start-screen" class="start-screen" aria-label="99크러시 시작 화면">
+        <img class="start-art" src="/assets/ui/start-hero.png?v=whiteboard-20260513" alt="" />
+        <div class="start-content">
+          <h1>99크러시</h1>
+          <div class="player-select" aria-label="플레이 인원 선택">
+            <button type="button" data-player-count="1">1인용</button>
+            <button type="button" data-player-count="2">2인용</button>
+            <button type="button" data-player-count="3">3인용</button>
+            <button type="button" data-player-count="4">4인용</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="arena" aria-label="동시 플레이 화면" hidden></section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
