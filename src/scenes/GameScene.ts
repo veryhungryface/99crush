@@ -21,25 +21,37 @@ interface TileView {
   blinkTimer: Phaser.Time.TimerEvent | null;
 }
 
+type PointerStart = {
+  position: Position;
+  x: number;
+  y: number;
+};
+
 type BoosterSelectDetail = {
   playerId: string;
   kind: BoosterKind;
 };
 
+type ResetDetail = {
+  playerId?: string;
+  roundEndsAtMs?: number;
+};
+
 const BOARD_SIZE = 8;
 const STARTING_TIME = 90;
+export const ROUND_DURATION_MS = STARTING_TIME * 1000;
 
 export type GameLayoutMode = "portrait" | "wide" | "mobile";
 
 export const GAME_SCENE_LAYOUTS = {
   portrait: {
-    width: 430,
-    height: 760,
-    cell: 45,
-    boardY: 120,
-    boardFrameSize: 412,
-    titleY: 82,
-    titleSize: "21px"
+    width: 700,
+    height: 860,
+    cell: 78,
+    boardY: 124,
+    boardFrameSize: 690,
+    titleY: 92,
+    titleSize: "30px"
   },
   mobile: {
     width: 430,
@@ -51,14 +63,13 @@ export const GAME_SCENE_LAYOUTS = {
     titleSize: "21px"
   },
   wide: {
-    width: 760,
-    height: 430,
-    cell: 36,
-    boardX: 54,
-    boardY: 50,
-    boardFrameSize: 330,
-    titleY: 31,
-    titleSize: "16px"
+    width: 1280,
+    height: 720,
+    cell: 64,
+    boardY: 112,
+    boardFrameSize: 590,
+    titleY: 74,
+    titleSize: "30px"
   }
 } as const;
 
@@ -77,7 +88,7 @@ export class GameScene extends Phaser.Scene {
   private inputZone!: Phaser.GameObjects.Zone;
   private selection: Position | null = null;
   private selectionRing!: Phaser.GameObjects.Graphics;
-  private pointerStart: { position: Position; x: number; y: number } | null = null;
+  private pointerStarts = new Map<number, PointerStart>();
   private busy = false;
   private score = 0;
   private moves = 30;
@@ -88,14 +99,22 @@ export class GameScene extends Phaser.Scene {
   private quizOpen = false;
   private finishActiveQuiz: ((correct: boolean) => void) | null = null;
   private resetToken = 0;
+  private roundEndsAtMs: number;
+  private gameOverDispatched = false;
   private selectedBooster: TargetedBoosterKind | null = null;
   private domEventsBound = false;
 
-  constructor(playerId = "p1", boardSeed = 20260512, layoutMode: GameLayoutMode = "portrait") {
+  constructor(
+    playerId = "p1",
+    boardSeed = 20260512,
+    layoutMode: GameLayoutMode = "portrait",
+    roundEndsAtMs = performance.now() + ROUND_DURATION_MS
+  ) {
     super(`GameScene:${playerId}:${layoutMode}`);
     this.playerId = playerId;
     this.boardSeed = boardSeed;
     this.layout = GAME_SCENE_LAYOUTS[layoutMode];
+    this.roundEndsAtMs = roundEndsAtMs;
   }
 
   preload() {
@@ -120,7 +139,8 @@ export class GameScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
 
     this.inputZone.on("pointerdown", this.handlePointerDown);
-    this.inputZone.on("pointerup", this.handlePointerUp);
+    this.input.on("pointerup", this.handlePointerUp);
+    this.input.on("pointerupoutside", this.handlePointerCancel);
     window.addEventListener("game:reset", this.resetFromDom);
     window.addEventListener("booster:select", this.handleBoosterSelect);
     window.addEventListener("booster:cancel", this.handleBoosterCancel);
@@ -134,8 +154,9 @@ export class GameScene extends Phaser.Scene {
 
   private resetFromDom = (event: Event) => {
     if (!this.canHandleDomEvent()) return;
-    const detail = (event as CustomEvent<{ playerId?: string }>).detail;
+    const detail = (event as CustomEvent<ResetDetail>).detail;
     if (detail?.playerId && detail.playerId !== this.playerId) return;
+    this.roundEndsAtMs = detail?.roundEndsAtMs ?? performance.now() + ROUND_DURATION_MS;
     this.resetGame();
   };
 
@@ -145,7 +166,7 @@ export class GameScene extends Phaser.Scene {
     if (!detail || detail.playerId !== this.playerId) return;
 
     unlockAudio();
-    if (this.busy || this.quizOpen || this.timeLeft <= 0) {
+    if (this.busy || this.quizOpen || this.timeLeft <= 0 || this.gameOverDispatched) {
       this.dispatchBoosterUsed(detail.kind, false);
       return;
     }
@@ -180,7 +201,9 @@ export class GameScene extends Phaser.Scene {
     window.removeEventListener("booster:cancel", this.handleBoosterCancel);
     window.removeEventListener("game:teardown", this.teardownFromDom);
     this.inputZone?.off("pointerdown", this.handlePointerDown);
-    this.inputZone?.off("pointerup", this.handlePointerUp);
+    this.input?.off("pointerup", this.handlePointerUp);
+    this.input?.off("pointerupoutside", this.handlePointerCancel);
+    this.pointerStarts.clear();
     this.timerEvent?.remove(false);
     this.cancelActiveQuiz();
   };
@@ -196,12 +219,14 @@ export class GameScene extends Phaser.Scene {
   private resetGame() {
     this.resetToken++;
     this.cancelActiveQuiz();
+    this.pointerStarts.clear();
+    this.gameOverDispatched = false;
     this.busy = false;
     this.setSelection(null);
     this.selectedBooster = null;
     this.score = 0;
     this.moves = 30;
-    this.timeLeft = STARTING_TIME;
+    this.timeLeft = this.computeTimeLeft();
     this.lastCombo = 0;
     this.timerEvent?.remove(false);
     this.views.forEach((view) => this.destroyTileView(view));
@@ -214,26 +239,59 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startRoundTimer() {
+    this.tickRoundTimer();
     this.timerEvent = this.time.addEvent({
-      delay: 1000,
+      delay: 250,
       loop: true,
-      callback: () => {
-        if (this.quizOpen) return;
-        if (this.timeLeft <= 0) return;
-        this.timeLeft -= 1;
-        this.updateHud();
-        if (this.timeLeft === 0) {
-          this.busy = true;
-          this.setSelection(null);
-          this.showToast("TIME UP!");
-        }
-      }
+      callback: () => this.tickRoundTimer()
     });
+  }
+
+  private computeTimeLeft() {
+    return Math.max(0, Math.ceil((this.roundEndsAtMs - performance.now()) / 1000));
+  }
+
+  private tickRoundTimer() {
+    if (this.gameOverDispatched) return;
+    const nextTimeLeft = this.computeTimeLeft();
+    if (nextTimeLeft !== this.timeLeft) {
+      this.timeLeft = nextTimeLeft;
+      this.updateHud();
+    }
+    if (this.timeLeft <= 0) this.finishRound();
+  }
+
+  private finishRound() {
+    if (this.gameOverDispatched) return;
+    this.gameOverDispatched = true;
+    this.timeLeft = 0;
+    this.cancelActiveQuiz();
+    this.pointerStarts.clear();
+    this.selectedBooster = null;
+    this.busy = true;
+    this.setSelection(null);
+    this.timerEvent?.remove(false);
+    this.timerEvent = null;
+    this.updateHud();
+    this.dispatchGameOver();
+    this.showToast("TIME UP!");
+  }
+
+  private dispatchGameOver() {
+    window.dispatchEvent(
+      new CustomEvent("game:over", {
+        detail: {
+          playerId: this.playerId,
+          score: this.score
+        }
+      })
+    );
   }
 
   private drawBackground() {
     const { width, height } = this.layout;
-    this.add.image(width / 2, height / 2, "ui:background").setDisplaySize(width, height);
+    const backgroundKey = width > height ? "ui:background-wide" : "ui:background";
+    this.add.image(width / 2, height / 2, backgroundKey).setDisplaySize(width, height);
 
     const bg = this.add.graphics();
     bg.fillStyle(0x10071f, 0.34);
@@ -335,23 +393,23 @@ export class GameScene extends Phaser.Scene {
 
   private handlePointerDown = (pointer: Phaser.Input.Pointer) => {
     unlockAudio();
-    if (this.busy) {
-      this.pointerStart = null;
+    if (this.busy || this.gameOverDispatched) {
+      this.pointerStarts.clear();
       return;
     }
     const position = this.worldToCell(pointer.worldX, pointer.worldY);
     if (!position) {
-      this.pointerStart = null;
+      this.pointerStarts.delete(pointer.id);
       return;
     }
-    this.pointerStart = { position, x: pointer.worldX, y: pointer.worldY };
+    this.pointerStarts.set(pointer.id, { position, x: pointer.worldX, y: pointer.worldY });
   };
 
   private handlePointerUp = (pointer: Phaser.Input.Pointer) => {
-    if (!this.pointerStart) return;
-    const start = this.pointerStart;
-    this.pointerStart = null;
-    if (this.busy) return;
+    const start = this.pointerStarts.get(pointer.id);
+    if (!start) return;
+    this.pointerStarts.delete(pointer.id);
+    if (this.busy || this.gameOverDispatched) return;
     const dx = pointer.worldX - start.x;
     const dy = pointer.worldY - start.y;
     const tapPosition = this.worldToCell(pointer.worldX, pointer.worldY) ?? start.position;
@@ -373,14 +431,19 @@ export class GameScene extends Phaser.Scene {
     void this.handleTap(tapPosition);
   };
 
+  private handlePointerCancel = (pointer: Phaser.Input.Pointer) => {
+    this.pointerStarts.delete(pointer.id);
+  };
+
   private async useShuffleBooster() {
-    if (this.busy || this.timeLeft <= 0) {
+    if (this.busy || this.timeLeft <= 0 || this.gameOverDispatched) {
       this.dispatchBoosterUsed("shuffle", false);
       return;
     }
 
     const turnResetToken = this.resetToken;
     this.busy = true;
+    this.pointerStarts.clear();
     try {
       this.selectedBooster = null;
       this.setSelection(null);
@@ -398,20 +461,21 @@ export class GameScene extends Phaser.Scene {
       this.handleActionError(error, "shuffle booster");
     } finally {
       if (turnResetToken === this.resetToken) {
-        this.busy = false;
+        this.busy = this.gameOverDispatched;
         this.updateHud();
       }
     }
   }
 
   private async useTargetedBooster(kind: TargetedBoosterKind, target: Position) {
-    if (this.busy || this.timeLeft <= 0) {
+    if (this.busy || this.timeLeft <= 0 || this.gameOverDispatched) {
       this.dispatchBoosterUsed(kind, false);
       return;
     }
 
     const turnResetToken = this.resetToken;
     this.busy = true;
+    this.pointerStarts.clear();
     try {
       this.selectedBooster = null;
       this.setSelection(null);
@@ -429,30 +493,37 @@ export class GameScene extends Phaser.Scene {
       this.dispatchBoosterUsed(kind, true);
       this.boosterImpactAt(kind, target);
       await this.animateClear(clear, kind === "rainbow" ? 2 : 1, turnResetToken);
-      if (turnResetToken !== this.resetToken) return;
+      if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
       await this.animateCollapse(this.engine.collapseAndRefill());
-      if (turnResetToken !== this.resetToken) return;
+      if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
       if (!(await this.resolveCascades([target], turnResetToken))) return;
       if (!this.engine.hasAvailableMove()) {
         this.engine.shuffleUntilPlayable();
         await this.syncAllViewsAfterShuffle();
-        if (turnResetToken !== this.resetToken) return;
+        if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
         this.showToast("RESHUFFLE!");
       }
     } catch (error) {
       this.handleActionError(error, `${kind} booster`);
     } finally {
       if (turnResetToken === this.resetToken) {
-        this.busy = false;
+        this.busy = this.gameOverDispatched;
         this.updateHud();
       }
     }
   }
 
   private async trySwap(first: Position, second: Position) {
-    if (this.busy || this.moves <= 0 || this.timeLeft <= 0 || !this.engine.areAdjacent(first, second)) return;
+    if (
+      this.busy ||
+      this.moves <= 0 ||
+      this.timeLeft <= 0 ||
+      this.gameOverDispatched ||
+      !this.engine.areAdjacent(first, second)
+    ) return;
     const turnResetToken = this.resetToken;
     this.busy = true;
+    this.pointerStarts.clear();
     try {
       this.setSelection(null);
       this.engine.swap(first, second);
@@ -471,7 +542,7 @@ export class GameScene extends Phaser.Scene {
 
       const quizAnchor = this.getQuizAnchor(matches, first, second);
       const answeredCorrectly = await this.askMultiplicationQuiz(quizAnchor);
-      if (turnResetToken !== this.resetToken) return;
+      if (turnResetToken !== this.resetToken || this.gameOverDispatched || this.timeLeft <= 0) return;
       if (!answeredCorrectly) {
         this.engine.swap(first, second);
         await this.animateSwap(first, second, true);
@@ -489,23 +560,23 @@ export class GameScene extends Phaser.Scene {
         if (!specialClear) return;
         this.score += specialClear.score;
         await this.animateClear(specialClear, 1, turnResetToken);
-        if (turnResetToken !== this.resetToken) return;
+        if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
         await this.animateCollapse(this.engine.collapseAndRefill());
-        if (turnResetToken !== this.resetToken) return;
+        if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
       }
 
       if (!(await this.resolveCascades([first, second], turnResetToken))) return;
       if (!this.engine.hasAvailableMove()) {
         this.engine.shuffleUntilPlayable();
         await this.syncAllViewsAfterShuffle();
-        if (turnResetToken !== this.resetToken) return;
+        if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
         this.showToast("RESHUFFLE!");
       }
     } catch (error) {
       this.handleActionError(error, "swap action");
     } finally {
       if (turnResetToken === this.resetToken) {
-        this.busy = false;
+        this.busy = this.gameOverDispatched;
         this.updateHud();
       }
     }
@@ -587,22 +658,22 @@ export class GameScene extends Phaser.Scene {
     let combo = 0;
     let matches = this.engine.findMatches();
     while (matches.length > 0 && combo < 12) {
-      if (turnResetToken !== this.resetToken) return false;
+      if (turnResetToken !== this.resetToken || this.gameOverDispatched) return false;
       combo++;
       this.lastCombo = combo;
       const clear = this.engine.clearMatches(matches, anchors);
       this.score += clear.score * combo;
       this.updateHud();
+      if (combo >= 2) this.showComboPraise(combo, clear);
       await this.animateClear(clear, combo, turnResetToken);
-      if (turnResetToken !== this.resetToken) return false;
+      if (turnResetToken !== this.resetToken || this.gameOverDispatched) return false;
       await this.animateCollapse(this.engine.collapseAndRefill());
-      if (turnResetToken !== this.resetToken) return false;
+      if (turnResetToken !== this.resetToken || this.gameOverDispatched) return false;
       matches = this.engine.findMatches();
-      if (combo >= 2) this.showToast(`COMBO x${combo}`);
       anchors = [];
     }
     await sleep(this, 80);
-    if (turnResetToken !== this.resetToken) return false;
+    if (turnResetToken !== this.resetToken || this.gameOverDispatched) return false;
     this.lastCombo = 0;
     this.updateHud();
     return true;
@@ -799,6 +870,87 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(760, () => shards.destroy());
   }
 
+  private showComboPraise(combo: number, clear: ClearResult) {
+    const center = this.getClearCenter(clear);
+    const label =
+      combo >= 5 ? "PERFECT" :
+        combo >= 4 ? "AMAZING" :
+          combo >= 3 ? "GREAT" :
+            "NICE";
+    const color = combo >= 4 ? "#fff078" : combo >= 3 ? "#7bf7ff" : "#ff93dc";
+    const glow = combo >= 4 ? "#ff4dc4" : "#5c2db8";
+
+    const shockwave = this.add.image(center.x, center.y, "item:shockwave");
+    shockwave.setBlendMode(Phaser.BlendModes.ADD);
+    shockwave.setScale(0.3);
+    shockwave.setDepth(55);
+    this.fxLayer.add(shockwave);
+    this.tweens.add({
+      targets: shockwave,
+      scale: 2.6 + combo * 0.38,
+      alpha: 0,
+      duration: 560,
+      ease: "Cubic.easeOut",
+      onComplete: () => shockwave.destroy()
+    });
+
+    const text = this.add.text(center.x, center.y - this.layout.cell * 0.45, `${label} x${combo}`, {
+      fontFamily: "Arial Rounded MT Bold, Arial, sans-serif",
+      fontSize: `${Math.min(34 + combo * 6, 68)}px`,
+      color,
+      stroke: glow,
+      strokeThickness: 8
+    });
+    text.setOrigin(0.5);
+    text.setDepth(60);
+    text.setShadow(0, 8, "#00000066", 0, true, true);
+    this.fxLayer.add(text);
+    this.tweens.add({
+      targets: text,
+      y: text.y - 42,
+      scale: { from: 0.72, to: 1.22 + combo * 0.03 },
+      alpha: 0,
+      angle: combo % 2 === 0 ? 5 : -5,
+      duration: 760,
+      ease: "Back.easeOut",
+      onComplete: () => text.destroy()
+    });
+
+    const particles = this.add.particles(center.x, center.y, "item:starburst", {
+      lifespan: { min: 420, max: 780 },
+      speed: { min: 170 + combo * 20, max: 340 + combo * 62 },
+      scale: { start: 0.28 + combo * 0.03, end: 0 },
+      rotate: { min: 0, max: 360 },
+      quantity: 12 + combo * 5,
+      emitting: false,
+      blendMode: Phaser.BlendModes.ADD
+    });
+    this.fxLayer.add(particles);
+    particles.explode(18 + combo * 6);
+    this.time.delayedCall(900, () => particles.destroy());
+  }
+
+  private getClearCenter(clear: ClearResult) {
+    if (clear.cleared.length === 0) {
+      return {
+        x: this.layout.width / 2,
+        y: this.layout.boardY + (BOARD_SIZE * this.layout.cell) / 2
+      };
+    }
+
+    const total = clear.cleared.reduce(
+      (sum, cleared) => ({
+        row: sum.row + cleared.position.row,
+        col: sum.col + cleared.position.col
+      }),
+      { row: 0, col: 0 }
+    );
+    return this.cellToWorld({
+      row: total.row / clear.cleared.length,
+      col: total.col / clear.cleared.length
+    });
+  }
+
   private quizSparkAt(anchor: { x: number; y: number }) {
     const flash = this.add.image(anchor.x, anchor.y, "item:sparkle");
     flash.setBlendMode(Phaser.BlendModes.ADD);
@@ -876,7 +1028,7 @@ export class GameScene extends Phaser.Scene {
   private handleActionError(error: unknown, context: string) {
     console.error(`[99crush] ${context} failed`, error);
     this.selectedBooster = null;
-    this.pointerStart = null;
+    this.pointerStarts.clear();
     this.setSelection(null);
     this.showToast("RETRY!");
   }
@@ -938,7 +1090,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private pulseSuggestedMove() {
-    if (this.busy || this.selection || this.selectedBooster) return;
+    if (this.busy || this.selection || this.selectedBooster || this.gameOverDispatched) return;
     const move = this.engine.findAvailableSwap();
     if (!move) return;
     for (const position of [move.first, move.second]) {
@@ -998,7 +1150,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   private get boardX() {
-    if ("boardX" in this.layout) return this.layout.boardX;
     return (this.layout.width - BOARD_SIZE * this.layout.cell) / 2;
   }
 

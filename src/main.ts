@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import "./style.css";
 import { type BoosterKind } from "./game/types";
-import { GameScene, GAME_SCENE_LAYOUTS, type GameLayoutMode } from "./scenes/GameScene";
+import { GameScene, GAME_SCENE_LAYOUTS, ROUND_DURATION_MS, type GameLayoutMode } from "./scenes/GameScene";
 
 const PLAYER_OPTIONS = [1, 2, 3, 4] as const;
 const BOOSTERS = [
@@ -44,6 +44,11 @@ type QuizShowDetail = {
   };
 };
 
+type GameOverDetail = {
+  playerId: PlayerId;
+  score: number;
+};
+
 const startScreen = document.querySelector<HTMLElement>("#start-screen");
 const arena = document.querySelector<HTMLElement>("#arena");
 const bgm = document.querySelector<HTMLAudioElement>("#bgm");
@@ -52,11 +57,15 @@ const games = new Map<PlayerId, Phaser.Game>();
 const activeQuizzes = new Map<PlayerId, QuizShowDetail>();
 const activeBoosters = new Map<PlayerId, BoosterKind | null>();
 const boosterInventories = new Map<PlayerId, BoosterInventory>();
+const playerScores = new Map<PlayerId, number>();
+const finishedPlayers = new Set<PlayerId>();
 const mobileViewportQuery = window.matchMedia("(max-width: 760px), (pointer: coarse) and (max-height: 760px)");
 let bgmMuted = window.localStorage.getItem("99crush:bgm-muted") === "true";
 let currentPlayerCount: PlayerCount | null = null;
 let currentLayoutMode: GameLayoutMode | null = null;
 let viewportRefreshTimer: number | null = null;
+let winAnnounced = false;
+let winAnnounceTimer: number | null = null;
 
 const formatTime = (seconds: number) => {
   const safeSeconds = Math.max(0, seconds);
@@ -68,6 +77,16 @@ const formatTime = (seconds: number) => {
 const playerLabel = (playerId: PlayerId) => `P${Number(playerId.slice(1))}`;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const getRoundDurationMs = () => {
+  const debugSeconds = import.meta.env.DEV
+    ? Number(new URLSearchParams(window.location.search).get("roundSeconds"))
+    : Number.NaN;
+  if (Number.isFinite(debugSeconds) && debugSeconds > 0) {
+    return clamp(debugSeconds, 3, 90) * 1000;
+  }
+  return ROUND_DURATION_MS;
+};
 
 const getPlayerCard = (playerId: PlayerId) =>
   arena?.querySelector<HTMLElement>(`.game-card[data-player-id="${playerId}"]`) ?? null;
@@ -149,6 +168,18 @@ const setArmedBooster = (playerId: PlayerId, kind: BoosterKind | null) => {
   updateBoosterButtons(playerId);
 };
 
+const clearWinState = () => {
+  winAnnounced = false;
+  if (winAnnounceTimer) window.clearTimeout(winAnnounceTimer);
+  winAnnounceTimer = null;
+  finishedPlayers.clear();
+  document.querySelectorAll<HTMLElement>(".game-card").forEach((card) => {
+    card.classList.remove("winner", "round-ended", "not-winner");
+    const ribbon = card.querySelector<HTMLElement>(".win-ribbon");
+    if (ribbon) ribbon.hidden = true;
+  });
+};
+
 const updateBoosterButtons = (playerId: PlayerId) => {
   const card = getPlayerCard(playerId);
   if (!card) return;
@@ -198,6 +229,9 @@ const createPlayerCard = (playerId: PlayerId) => {
       </button>
     </div>
     <div class="game-root"></div>
+    <div class="win-ribbon" aria-live="assertive" hidden>
+      <span>WIN</span>
+    </div>
     <section class="math-quiz" aria-live="assertive" hidden>
       <div class="math-bubble" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
         <span id="${titleId}" class="quiz-kicker">구구단 찬스</span>
@@ -231,24 +265,39 @@ const createPlayerCard = (playerId: PlayerId) => {
   return card;
 };
 
-const createGame = (playerId: PlayerId, parent: HTMLElement, index: number, layoutMode: GameLayoutMode) => {
+const createGame = (
+  playerId: PlayerId,
+  parent: HTMLElement,
+  index: number,
+  layoutMode: GameLayoutMode,
+  roundEndsAtMs: number
+) => {
   const layout = GAME_SCENE_LAYOUTS[layoutMode];
   return new Phaser.Game({
-    type: Phaser.CANVAS,
+    type: Phaser.WEBGL,
     parent,
     backgroundColor: "#17112d",
     scale: {
       mode: Phaser.Scale.FIT,
-      autoCenter: Phaser.Scale.CENTER_BOTH,
+      autoCenter: layoutMode === "portrait" ? Phaser.Scale.CENTER_HORIZONTALLY : Phaser.Scale.CENTER_BOTH,
       width: layout.width,
       height: layout.height
     },
+    input: {
+      activePointers: 8,
+      touch: {
+        capture: true
+      },
+      windowEvents: true
+    },
     render: {
       antialias: true,
+      antialiasGL: true,
+      smoothPixelArt: true,
       pixelArt: false,
       roundPixels: false
     },
-    scene: [new GameScene(playerId, 20260512 + index * 101, layoutMode)]
+    scene: [new GameScene(playerId, 20260512 + index * 101, layoutMode, roundEndsAtMs)]
   });
 };
 
@@ -259,6 +308,11 @@ const destroyGames = () => {
   activeQuizzes.clear();
   activeBoosters.clear();
   boosterInventories.clear();
+  playerScores.clear();
+  finishedPlayers.clear();
+  if (winAnnounceTimer) window.clearTimeout(winAnnounceTimer);
+  winAnnounceTimer = null;
+  winAnnounced = false;
 };
 
 const startGame = (playerCount: PlayerCount) => {
@@ -267,6 +321,7 @@ const startGame = (playerCount: PlayerCount) => {
   const layoutMode = getLayoutMode(actualPlayerCount);
   destroyGames();
   arena.replaceChildren();
+  clearWinState();
   currentPlayerCount = actualPlayerCount;
   currentLayoutMode = layoutMode;
   arena.dataset.players = String(actualPlayerCount);
@@ -274,16 +329,18 @@ const startGame = (playerCount: PlayerCount) => {
   startScreen.hidden = true;
   arena.hidden = false;
   playBgm();
+  const roundEndsAtMs = performance.now() + getRoundDurationMs();
 
   for (let index = 0; index < actualPlayerCount; index++) {
     const playerId = `p${index + 1}` as PlayerId;
     const card = createPlayerCard(playerId);
     boosterInventories.set(playerId, createBoosterInventory());
     activeBoosters.set(playerId, null);
+    playerScores.set(playerId, 0);
     arena.append(card);
     updateBoosterButtons(playerId);
     const root = card.querySelector<HTMLElement>(".game-root");
-    if (root) games.set(playerId, createGame(playerId, root, index, layoutMode));
+    if (root) games.set(playerId, createGame(playerId, root, index, layoutMode, roundEndsAtMs));
   }
 
   refreshActiveGames();
@@ -341,12 +398,55 @@ window.addEventListener("hud:update", (event) => {
   const comboFill = card.querySelector<HTMLElement>('[data-stat="combo"]');
 
   if (score) score.textContent = detail.score.toLocaleString("en-US");
+  playerScores.set(detail.playerId, detail.score);
   if (moves) moves.textContent = String(detail.moves);
   if (timeLeft) {
     timeLeft.textContent = formatTime(detail.timeLeft);
     timeLeft.closest(".stat-card")?.classList.toggle("warning", detail.timeLeft <= 10);
   }
   if (comboFill) comboFill.style.width = `${Math.min(100, detail.combo * 22)}%`;
+});
+
+const showWinners = () => {
+  if (winAnnounced || games.size === 0) return;
+  winAnnounced = true;
+
+  const entries = [...games.keys()].map((playerId) => ({
+    playerId,
+    score: playerScores.get(playerId) ?? 0
+  }));
+  const highScore = Math.max(...entries.map((entry) => entry.score));
+  const winners = new Set(entries.filter((entry) => entry.score === highScore).map((entry) => entry.playerId));
+
+  entries.forEach(({ playerId }) => {
+    const card = getPlayerCard(playerId);
+    if (!card) return;
+    const isWinner = winners.has(playerId);
+    card.classList.add("round-ended");
+    card.classList.toggle("winner", isWinner);
+    card.classList.toggle("not-winner", !isWinner);
+    const ribbon = card.querySelector<HTMLElement>(".win-ribbon");
+    if (ribbon) ribbon.hidden = !isWinner;
+  });
+};
+
+window.addEventListener("game:over", (event) => {
+  const detail = (event as CustomEvent<GameOverDetail>).detail;
+  if (!detail) return;
+  playerScores.set(detail.playerId, detail.score);
+  finishedPlayers.add(detail.playerId);
+
+  if (finishedPlayers.size >= games.size) {
+    showWinners();
+    return;
+  }
+
+  if (!winAnnounceTimer) {
+    winAnnounceTimer = window.setTimeout(() => {
+      winAnnounceTimer = null;
+      showWinners();
+    }, 700);
+  }
 });
 
 const positionQuizBubble = (detail: QuizShowDetail, card: HTMLElement) => {
@@ -435,9 +535,22 @@ arena?.addEventListener("click", (event) => {
   if (resetButton) {
     const playerId = resetButton.closest<HTMLElement>(".game-card")?.dataset.playerId as PlayerId | undefined;
     if (playerId) {
+      const card = getPlayerCard(playerId);
+      card?.classList.remove("winner", "round-ended", "not-winner");
+      const ribbon = card?.querySelector<HTMLElement>(".win-ribbon");
+      if (ribbon) ribbon.hidden = true;
+      finishedPlayers.delete(playerId);
+      playerScores.set(playerId, 0);
       boosterInventories.set(playerId, createBoosterInventory());
       setArmedBooster(playerId, null);
-      window.dispatchEvent(new CustomEvent("game:reset", { detail: { playerId } }));
+      window.dispatchEvent(
+        new CustomEvent("game:reset", {
+          detail: {
+            playerId,
+            roundEndsAtMs: performance.now() + getRoundDurationMs()
+          }
+        })
+      );
     }
     return;
   }
