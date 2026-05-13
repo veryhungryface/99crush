@@ -46,10 +46,17 @@ type QuizShowDetail = {
 
 const startScreen = document.querySelector<HTMLElement>("#start-screen");
 const arena = document.querySelector<HTMLElement>("#arena");
+const bgm = document.querySelector<HTMLAudioElement>("#bgm");
+const muteToggle = document.querySelector<HTMLButtonElement>("#mute-toggle");
 const games = new Map<PlayerId, Phaser.Game>();
 const activeQuizzes = new Map<PlayerId, QuizShowDetail>();
 const activeBoosters = new Map<PlayerId, BoosterKind | null>();
 const boosterInventories = new Map<PlayerId, BoosterInventory>();
+const mobileViewportQuery = window.matchMedia("(max-width: 760px), (pointer: coarse) and (max-height: 760px)");
+let bgmMuted = window.localStorage.getItem("99crush:bgm-muted") === "true";
+let currentPlayerCount: PlayerCount | null = null;
+let currentLayoutMode: GameLayoutMode | null = null;
+let viewportRefreshTimer: number | null = null;
 
 const formatTime = (seconds: number) => {
   const safeSeconds = Math.max(0, seconds);
@@ -64,6 +71,61 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 
 const getPlayerCard = (playerId: PlayerId) =>
   arena?.querySelector<HTMLElement>(`.game-card[data-player-id="${playerId}"]`) ?? null;
+
+const isMobileViewport = () => mobileViewportQuery.matches;
+
+const normalizePlayerCount = (playerCount: PlayerCount): PlayerCount =>
+  isMobileViewport() ? 1 : playerCount;
+
+const getLayoutMode = (playerCount: PlayerCount): GameLayoutMode => {
+  if (isMobileViewport()) return "mobile";
+  return playerCount === 1 ? "wide" : "portrait";
+};
+
+const refreshActiveGames = () => {
+  requestAnimationFrame(() => {
+    games.forEach((game) => game.scale.refresh());
+  });
+};
+
+const updatePlayerModeButtons = () => {
+  const mobile = isMobileViewport();
+  document.documentElement.dataset.mobile = mobile ? "true" : "false";
+  if (startScreen) startScreen.dataset.mobile = mobile ? "true" : "false";
+
+  document.querySelectorAll<HTMLButtonElement>("[data-player-count]").forEach((button) => {
+    const playerCount = Number(button.dataset.playerCount);
+    const mobileBlocked = mobile && playerCount !== 1;
+    button.disabled = mobileBlocked;
+    button.hidden = mobileBlocked;
+    button.setAttribute("aria-hidden", mobileBlocked ? "true" : "false");
+  });
+};
+
+const syncBgmState = () => {
+  if (!bgm || !muteToggle) return;
+  bgm.muted = bgmMuted;
+  muteToggle.classList.toggle("muted", bgmMuted);
+  muteToggle.setAttribute("aria-pressed", bgmMuted ? "true" : "false");
+  muteToggle.setAttribute("aria-label", bgmMuted ? "배경음 켜기" : "배경음 음소거");
+};
+
+const playBgm = () => {
+  if (!bgm || !muteToggle) return;
+  bgm.volume = 0.42;
+  bgm.muted = bgmMuted;
+  muteToggle.hidden = false;
+
+  const playPromise = bgm.play();
+  if (playPromise) {
+    playPromise.catch(() => {
+      muteToggle.classList.add("needs-start");
+    });
+  }
+};
+
+syncBgmState();
+updatePlayerModeButtons();
 
 const createBoosterInventory = (): BoosterInventory =>
   BOOSTERS.reduce(
@@ -191,6 +253,7 @@ const createGame = (playerId: PlayerId, parent: HTMLElement, index: number, layo
 };
 
 const destroyGames = () => {
+  window.dispatchEvent(new CustomEvent("game:teardown"));
   for (const game of games.values()) game.destroy(true);
   games.clear();
   activeQuizzes.clear();
@@ -200,15 +263,19 @@ const destroyGames = () => {
 
 const startGame = (playerCount: PlayerCount) => {
   if (!arena || !startScreen) return;
+  const actualPlayerCount = normalizePlayerCount(playerCount);
+  const layoutMode = getLayoutMode(actualPlayerCount);
   destroyGames();
   arena.replaceChildren();
-  const layoutMode: GameLayoutMode = "portrait";
-  arena.dataset.players = String(playerCount);
+  currentPlayerCount = actualPlayerCount;
+  currentLayoutMode = layoutMode;
+  arena.dataset.players = String(actualPlayerCount);
   arena.dataset.layout = layoutMode;
   startScreen.hidden = true;
   arena.hidden = false;
+  playBgm();
 
-  for (let index = 0; index < playerCount; index++) {
+  for (let index = 0; index < actualPlayerCount; index++) {
     const playerId = `p${index + 1}` as PlayerId;
     const card = createPlayerCard(playerId);
     boosterInventories.set(playerId, createBoosterInventory());
@@ -219,9 +286,7 @@ const startGame = (playerCount: PlayerCount) => {
     if (root) games.set(playerId, createGame(playerId, root, index, layoutMode));
   }
 
-  requestAnimationFrame(() => {
-    games.forEach((game) => game.scale.refresh());
-  });
+  refreshActiveGames();
 };
 
 document.querySelectorAll<HTMLButtonElement>("[data-player-count]").forEach((button) => {
@@ -229,6 +294,39 @@ document.querySelectorAll<HTMLButtonElement>("[data-player-count]").forEach((but
     const playerCount = Number(button.dataset.playerCount);
     if (PLAYER_OPTIONS.includes(playerCount as PlayerCount)) startGame(playerCount as PlayerCount);
   });
+});
+
+const scheduleViewportRefresh = () => {
+  if (viewportRefreshTimer) window.clearTimeout(viewportRefreshTimer);
+  viewportRefreshTimer = window.setTimeout(() => {
+    viewportRefreshTimer = null;
+    updatePlayerModeButtons();
+
+    if (!currentPlayerCount || arena?.hidden) {
+      refreshActiveGames();
+      return;
+    }
+
+    const nextPlayerCount = normalizePlayerCount(currentPlayerCount);
+    const nextLayoutMode = getLayoutMode(nextPlayerCount);
+    if (nextPlayerCount !== currentPlayerCount || nextLayoutMode !== currentLayoutMode) {
+      startGame(nextPlayerCount);
+      return;
+    }
+
+    refreshActiveGames();
+  }, 160);
+};
+
+window.addEventListener("resize", scheduleViewportRefresh);
+mobileViewportQuery.addEventListener("change", scheduleViewportRefresh);
+
+muteToggle?.addEventListener("click", () => {
+  bgmMuted = !bgmMuted;
+  window.localStorage.setItem("99crush:bgm-muted", String(bgmMuted));
+  muteToggle.classList.remove("needs-start");
+  syncBgmState();
+  if (!bgmMuted) playBgm();
 });
 
 window.addEventListener("hud:update", (event) => {
@@ -396,5 +494,6 @@ arena?.addEventListener("click", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  bgm?.pause();
   destroyGames();
 });

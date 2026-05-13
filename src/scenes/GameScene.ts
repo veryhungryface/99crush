@@ -29,7 +29,7 @@ type BoosterSelectDetail = {
 const BOARD_SIZE = 8;
 const STARTING_TIME = 90;
 
-export type GameLayoutMode = "portrait" | "wide";
+export type GameLayoutMode = "portrait" | "wide" | "mobile";
 
 export const GAME_SCENE_LAYOUTS = {
   portrait: {
@@ -39,6 +39,15 @@ export const GAME_SCENE_LAYOUTS = {
     boardY: 120,
     boardFrameSize: 412,
     titleY: 82,
+    titleSize: "21px"
+  },
+  mobile: {
+    width: 430,
+    height: 900,
+    cell: 45,
+    boardY: 136,
+    boardFrameSize: 412,
+    titleY: 98,
     titleSize: "21px"
   },
   wide: {
@@ -79,6 +88,7 @@ export class GameScene extends Phaser.Scene {
   private finishActiveQuiz: ((correct: boolean) => void) | null = null;
   private resetToken = 0;
   private selectedBooster: TargetedBoosterKind | null = null;
+  private domEventsBound = false;
 
   constructor(playerId = "p1", boardSeed = 20260512, layoutMode: GameLayoutMode = "portrait") {
     super(`GameScene:${playerId}:${layoutMode}`);
@@ -113,26 +123,23 @@ export class GameScene extends Phaser.Scene {
     window.addEventListener("game:reset", this.resetFromDom);
     window.addEventListener("booster:select", this.handleBoosterSelect);
     window.addEventListener("booster:cancel", this.handleBoosterCancel);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      window.removeEventListener("game:reset", this.resetFromDom);
-      window.removeEventListener("booster:select", this.handleBoosterSelect);
-      window.removeEventListener("booster:cancel", this.handleBoosterCancel);
-      this.inputZone.off("pointerdown", this.handlePointerDown);
-      this.inputZone.off("pointerup", this.handlePointerUp);
-      this.timerEvent?.remove(false);
-      this.cancelActiveQuiz();
-    });
+    window.addEventListener("game:teardown", this.teardownFromDom);
+    this.domEventsBound = true;
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.teardownDomEvents);
+    this.events.once(Phaser.Scenes.Events.DESTROY, this.teardownDomEvents);
 
     this.resetGame();
   }
 
   private resetFromDom = (event: Event) => {
+    if (!this.canHandleDomEvent()) return;
     const detail = (event as CustomEvent<{ playerId?: string }>).detail;
     if (detail?.playerId && detail.playerId !== this.playerId) return;
     this.resetGame();
   };
 
   private handleBoosterSelect = (event: Event) => {
+    if (!this.canHandleDomEvent()) return;
     const detail = (event as CustomEvent<BoosterSelectDetail>).detail;
     if (!detail || detail.playerId !== this.playerId) return;
 
@@ -153,11 +160,37 @@ export class GameScene extends Phaser.Scene {
   };
 
   private handleBoosterCancel = (event: Event) => {
+    if (!this.canHandleDomEvent()) return;
     const detail = (event as CustomEvent<{ playerId?: string }>).detail;
     if (detail?.playerId && detail.playerId !== this.playerId) return;
     this.selectedBooster = null;
     this.setSelection(null);
   };
+
+  private teardownFromDom = () => {
+    this.teardownDomEvents();
+  };
+
+  private teardownDomEvents = () => {
+    if (!this.domEventsBound) return;
+    this.domEventsBound = false;
+    window.removeEventListener("game:reset", this.resetFromDom);
+    window.removeEventListener("booster:select", this.handleBoosterSelect);
+    window.removeEventListener("booster:cancel", this.handleBoosterCancel);
+    window.removeEventListener("game:teardown", this.teardownFromDom);
+    this.inputZone?.off("pointerdown", this.handlePointerDown);
+    this.inputZone?.off("pointerup", this.handlePointerUp);
+    this.timerEvent?.remove(false);
+    this.cancelActiveQuiz();
+  };
+
+  private canHandleDomEvent() {
+    try {
+      return this.domEventsBound && this.scene.isActive();
+    } catch {
+      return false;
+    }
+  }
 
   private resetGame() {
     this.resetToken++;
@@ -300,16 +333,23 @@ export class GameScene extends Phaser.Scene {
 
   private handlePointerDown = (pointer: Phaser.Input.Pointer) => {
     unlockAudio();
-    if (this.busy) return;
+    if (this.busy) {
+      this.pointerStart = null;
+      return;
+    }
     const position = this.worldToCell(pointer.worldX, pointer.worldY);
-    if (!position) return;
+    if (!position) {
+      this.pointerStart = null;
+      return;
+    }
     this.pointerStart = { position, x: pointer.worldX, y: pointer.worldY };
   };
 
   private handlePointerUp = (pointer: Phaser.Input.Pointer) => {
-    if (this.busy || !this.pointerStart) return;
+    if (!this.pointerStart) return;
     const start = this.pointerStart;
     this.pointerStart = null;
+    if (this.busy) return;
     const dx = pointer.worldX - start.x;
     const dy = pointer.worldY - start.y;
     const tapPosition = this.worldToCell(pointer.worldX, pointer.worldY) ?? start.position;
@@ -337,20 +377,29 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    const turnResetToken = this.resetToken;
     this.busy = true;
-    this.selectedBooster = null;
-    this.setSelection(null);
-    this.engine.shuffleUntilPlayable();
-    this.dispatchBoosterUsed("shuffle", true);
-    this.cameras.main.shake(110, 0.006);
-    this.quizSparkAt({
-      x: this.layout.width / 2,
-      y: this.layout.boardY + (BOARD_SIZE * this.layout.cell) / 2
-    });
-    await this.syncAllViewsAfterShuffle();
-    this.showToast("SHUFFLE!");
-    this.busy = false;
-    this.updateHud();
+    try {
+      this.selectedBooster = null;
+      this.setSelection(null);
+      this.engine.shuffleUntilPlayable();
+      this.dispatchBoosterUsed("shuffle", true);
+      this.cameras.main.shake(110, 0.006);
+      this.quizSparkAt({
+        x: this.layout.width / 2,
+        y: this.layout.boardY + (BOARD_SIZE * this.layout.cell) / 2
+      });
+      await this.syncAllViewsAfterShuffle();
+      if (turnResetToken !== this.resetToken) return;
+      this.showToast("SHUFFLE!");
+    } catch (error) {
+      this.handleActionError(error, "shuffle booster");
+    } finally {
+      if (turnResetToken === this.resetToken) {
+        this.busy = false;
+        this.updateHud();
+      }
+    }
   }
 
   private async useTargetedBooster(kind: TargetedBoosterKind, target: Position) {
@@ -361,89 +410,103 @@ export class GameScene extends Phaser.Scene {
 
     const turnResetToken = this.resetToken;
     this.busy = true;
-    this.selectedBooster = null;
-    this.setSelection(null);
+    try {
+      this.selectedBooster = null;
+      this.setSelection(null);
 
-    const clear = this.engine.clearBooster(kind, target);
-    if (!clear) {
-      this.invalidNudge(target);
-      this.dispatchBoosterUsed(kind, false);
-      this.busy = false;
-      return;
-    }
+      const clear = this.engine.clearBooster(kind, target);
+      if (!clear) {
+        this.invalidNudge(target);
+        this.dispatchBoosterUsed(kind, false);
+        return;
+      }
 
-    this.score += clear.score;
-    this.lastCombo = kind === "rainbow" ? 2 : 1;
-    this.updateHud();
-    this.dispatchBoosterUsed(kind, true);
-    this.boosterImpactAt(kind, target);
-    await this.animateClear(clear, kind === "rainbow" ? 2 : 1);
-    if (turnResetToken !== this.resetToken) return;
-    await this.animateCollapse(this.engine.collapseAndRefill());
-    await this.resolveCascades([target]);
-    if (!this.engine.hasAvailableMove()) {
-      this.engine.shuffleUntilPlayable();
-      await this.syncAllViewsAfterShuffle();
-      this.showToast("RESHUFFLE!");
+      this.score += clear.score;
+      this.lastCombo = kind === "rainbow" ? 2 : 1;
+      this.updateHud();
+      this.dispatchBoosterUsed(kind, true);
+      this.boosterImpactAt(kind, target);
+      await this.animateClear(clear, kind === "rainbow" ? 2 : 1, turnResetToken);
+      if (turnResetToken !== this.resetToken) return;
+      await this.animateCollapse(this.engine.collapseAndRefill());
+      if (turnResetToken !== this.resetToken) return;
+      if (!(await this.resolveCascades([target], turnResetToken))) return;
+      if (!this.engine.hasAvailableMove()) {
+        this.engine.shuffleUntilPlayable();
+        await this.syncAllViewsAfterShuffle();
+        if (turnResetToken !== this.resetToken) return;
+        this.showToast("RESHUFFLE!");
+      }
+    } catch (error) {
+      this.handleActionError(error, `${kind} booster`);
+    } finally {
+      if (turnResetToken === this.resetToken) {
+        this.busy = false;
+        this.updateHud();
+      }
     }
-    this.busy = false;
-    this.updateHud();
   }
 
   private async trySwap(first: Position, second: Position) {
     if (this.busy || this.moves <= 0 || this.timeLeft <= 0 || !this.engine.areAdjacent(first, second)) return;
     const turnResetToken = this.resetToken;
     this.busy = true;
-    this.setSelection(null);
-    this.engine.swap(first, second);
-    await this.animateSwap(first, second);
-
-    const hasSwapSpecial = this.hasSwapSpecial(first, second);
-    const matches = this.engine.findMatches();
-    if (!hasSwapSpecial && matches.length === 0) {
+    try {
+      this.setSelection(null);
       this.engine.swap(first, second);
-      await this.animateSwap(first, second, true);
-      this.invalidNudge(first);
-      this.busy = false;
-      return;
-    }
+      await this.animateSwap(first, second);
+      if (turnResetToken !== this.resetToken) return;
 
-    const quizAnchor = this.getQuizAnchor(matches, first, second);
-    const answeredCorrectly = await this.askMultiplicationQuiz(quizAnchor);
-    if (turnResetToken !== this.resetToken) return;
-    if (!answeredCorrectly) {
-      this.engine.swap(first, second);
-      await this.animateSwap(first, second, true);
-      this.invalidNudge(first);
-      this.showToast("TRY AGAIN!");
-      this.busy = false;
-      this.updateHud();
-      return;
-    }
-
-    this.quizSparkAt(quizAnchor);
-    this.showToast("CORRECT!");
-    this.moves = Math.max(0, this.moves - 1);
-    if (hasSwapSpecial) {
-      const specialClear = this.engine.clearSwapSpecial(first, second);
-      if (!specialClear) {
-        this.busy = false;
-        this.updateHud();
+      const hasSwapSpecial = this.hasSwapSpecial(first, second);
+      const matches = this.engine.findMatches();
+      if (!hasSwapSpecial && matches.length === 0) {
+        this.engine.swap(first, second);
+        await this.animateSwap(first, second, true);
+        if (turnResetToken !== this.resetToken) return;
+        this.invalidNudge(first);
         return;
       }
-      this.score += specialClear.score;
-      await this.animateClear(specialClear, 1);
-      await this.animateCollapse(this.engine.collapseAndRefill());
-    }
 
-    await this.resolveCascades([first, second]);
-    if (!this.engine.hasAvailableMove()) {
-      this.engine.shuffleUntilPlayable();
-      await this.syncAllViewsAfterShuffle();
-      this.showToast("RESHUFFLE!");
+      const quizAnchor = this.getQuizAnchor(matches, first, second);
+      const answeredCorrectly = await this.askMultiplicationQuiz(quizAnchor);
+      if (turnResetToken !== this.resetToken) return;
+      if (!answeredCorrectly) {
+        this.engine.swap(first, second);
+        await this.animateSwap(first, second, true);
+        if (turnResetToken !== this.resetToken) return;
+        this.invalidNudge(first);
+        this.showToast("TRY AGAIN!");
+        return;
+      }
+
+      this.quizSparkAt(quizAnchor);
+      this.showToast("CORRECT!");
+      this.moves = Math.max(0, this.moves - 1);
+      if (hasSwapSpecial) {
+        const specialClear = this.engine.clearSwapSpecial(first, second);
+        if (!specialClear) return;
+        this.score += specialClear.score;
+        await this.animateClear(specialClear, 1, turnResetToken);
+        if (turnResetToken !== this.resetToken) return;
+        await this.animateCollapse(this.engine.collapseAndRefill());
+        if (turnResetToken !== this.resetToken) return;
+      }
+
+      if (!(await this.resolveCascades([first, second], turnResetToken))) return;
+      if (!this.engine.hasAvailableMove()) {
+        this.engine.shuffleUntilPlayable();
+        await this.syncAllViewsAfterShuffle();
+        if (turnResetToken !== this.resetToken) return;
+        this.showToast("RESHUFFLE!");
+      }
+    } catch (error) {
+      this.handleActionError(error, "swap action");
+    } finally {
+      if (turnResetToken === this.resetToken) {
+        this.busy = false;
+        this.updateHud();
+      }
     }
-    this.busy = false;
-    this.updateHud();
   }
 
   private hasSwapSpecial(first: Position, second: Position) {
@@ -512,27 +575,35 @@ export class GameScene extends Phaser.Scene {
   }
 
   private cancelActiveQuiz() {
-    this.finishActiveQuiz?.(false);
+    const finish = this.finishActiveQuiz;
+    if (!finish) return;
+    this.finishActiveQuiz = null;
+    finish(false);
   }
 
-  private async resolveCascades(anchors: Position[]) {
+  private async resolveCascades(anchors: Position[], turnResetToken: number) {
     let combo = 0;
     let matches = this.engine.findMatches();
     while (matches.length > 0 && combo < 12) {
+      if (turnResetToken !== this.resetToken) return false;
       combo++;
       this.lastCombo = combo;
       const clear = this.engine.clearMatches(matches, anchors);
       this.score += clear.score * combo;
       this.updateHud();
-      await this.animateClear(clear, combo);
+      await this.animateClear(clear, combo, turnResetToken);
+      if (turnResetToken !== this.resetToken) return false;
       await this.animateCollapse(this.engine.collapseAndRefill());
+      if (turnResetToken !== this.resetToken) return false;
       matches = this.engine.findMatches();
       if (combo >= 2) this.showToast(`COMBO x${combo}`);
       anchors = [];
     }
     await sleep(this, 80);
+    if (turnResetToken !== this.resetToken) return false;
     this.lastCombo = 0;
     this.updateHud();
+    return true;
   }
 
   private async animateSwap(first: Position, second: Position, reverse = false) {
@@ -566,11 +637,12 @@ export class GameScene extends Phaser.Scene {
     ]);
   }
 
-  private async animateClear(clear: ClearResult, combo: number) {
+  private async animateClear(clear: ClearResult, combo: number, turnResetToken: number) {
     if (clear.cleared.length === 0) return;
     playBurst(combo);
     this.cameras.main.shake(95 + combo * 20, Math.min(0.004 + combo * 0.0015, 0.012));
     await sleep(this, Math.min(42 + combo * 12, 90));
+    if (turnResetToken !== this.resetToken) return;
 
     for (const cleared of clear.cleared) {
       const view = this.views.get(cleared.tile.id);
@@ -595,6 +667,7 @@ export class GameScene extends Phaser.Scene {
         })
         .filter(Boolean)
     );
+    if (turnResetToken !== this.resetToken) return;
 
     for (const cleared of clear.cleared) {
       const view = this.views.get(cleared.tile.id);
@@ -603,6 +676,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (clear.created) {
+      if (turnResetToken !== this.resetToken) return;
       const view = this.views.get(clear.created.tile.id);
       if (view) {
         view.tile = clear.created.tile;
@@ -797,6 +871,14 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
+  private handleActionError(error: unknown, context: string) {
+    console.error(`[99crush] ${context} failed`, error);
+    this.selectedBooster = null;
+    this.pointerStart = null;
+    this.setSelection(null);
+    this.showToast("RETRY!");
+  }
+
   private invalidNudge(position: Position) {
     const tile = this.engine.getTile(position);
     const view = tile ? this.views.get(tile.id) : null;
@@ -928,10 +1010,42 @@ export class GameScene extends Phaser.Scene {
       valid.map(
         (config) =>
           new Promise<void>((resolve) => {
+            const timing = config as {
+              delay?: number;
+              duration?: number;
+              repeat?: number;
+              yoyo?: boolean;
+              onComplete?: (...args: unknown[]) => void;
+              onStop?: (...args: unknown[]) => void;
+            };
+            const delay = typeof timing.delay === "number" ? timing.delay : 0;
+            const duration = typeof timing.duration === "number" ? timing.duration : 0;
+            const repeat = typeof timing.repeat === "number" && timing.repeat > 0 ? timing.repeat : 0;
+            const yoyoMultiplier = timing.yoyo ? 2 : 1;
+            const timeoutMs = Math.max(120, delay + duration * yoyoMultiplier * (repeat + 1) + 420);
+            let settled = false;
+            let fallback: Phaser.Time.TimerEvent | null = null;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
+              fallback?.remove(false);
+              resolve();
+            };
+            const originalOnComplete = timing.onComplete;
+            const originalOnStop = timing.onStop;
+
+            fallback = this.time.delayedCall(timeoutMs, finish);
             this.tweens.add({
               ...config,
-              onComplete: () => resolve()
-            });
+              onComplete: (...args: unknown[]) => {
+                originalOnComplete?.(...args);
+                finish();
+              },
+              onStop: (...args: unknown[]) => {
+                originalOnStop?.(...args);
+                finish();
+              }
+            } as Phaser.Types.Tweens.TweenBuilderConfig);
           })
       )
     );
@@ -953,11 +1067,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private setTileFrame(view: TileView, frame: TileFrame) {
-    view.base.setTexture(textureKey(view.tile.kind, frame));
+    const scene = view.base.scene as Phaser.Scene | undefined;
+    const key = textureKey(view.tile.kind, frame);
+    if (!view.container.active || !view.base.active || !scene?.textures.exists(key)) return;
+    view.base.setTexture(key);
   }
 
   private destroyTileView(view: TileView) {
     view.blinkTimer?.remove(false);
+    view.blinkTimer = null;
     view.container.destroy();
   }
 }

@@ -21,6 +21,15 @@
       </section>
 
       <section id="arena" aria-label="동시 플레이 화면" hidden></section>
+      <button id="mute-toggle" class="audio-toggle" type="button" aria-label="배경음 음소거" aria-pressed="false" hidden>
+        <span class="audio-icon" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+        <strong>BGM</strong>
+      </button>
+      <audio id="bgm" src="/assets/audio/99crush_bgm.mp3" loop preload="auto"></audio>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
