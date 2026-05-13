@@ -54,6 +54,7 @@ export const GAME_SCENE_LAYOUTS = {
     width: 760,
     height: 430,
     cell: 36,
+    boardX: 54,
     boardY: 50,
     boardFrameSize: 330,
     titleY: 31,
@@ -256,11 +257,12 @@ export class GameScene extends Phaser.Scene {
 
   private drawBoardFrame() {
     const boardPixels = BOARD_SIZE * this.layout.cell;
+    const boardCenterX = this.boardX + boardPixels / 2;
     this.add
-      .image(this.layout.width / 2, this.layout.boardY + boardPixels / 2, "ui:board-frame")
+      .image(boardCenterX, this.layout.boardY + boardPixels / 2, "ui:board-frame")
       .setDisplaySize(this.layout.boardFrameSize, this.layout.boardFrameSize);
 
-    const title = this.add.text(this.layout.width / 2, this.layout.titleY, "99크러시", {
+    const title = this.add.text(boardCenterX, this.layout.titleY, "99크러시", {
       fontFamily: "Arial Rounded MT Bold, Arial, sans-serif",
       fontSize: this.layout.titleSize,
       color: "#fff5c8",
@@ -996,6 +998,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private get boardX() {
+    if ("boardX" in this.layout) return this.layout.boardX;
     return (this.layout.width - BOARD_SIZE * this.layout.cell) / 2;
   }
 
