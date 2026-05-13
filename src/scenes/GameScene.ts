@@ -127,8 +127,8 @@ export class GameScene extends Phaser.Scene {
     this.drawBackground();
     this.drawBoardFrame();
 
-    this.tileLayer = this.add.layer();
-    this.fxLayer = this.add.layer();
+    this.tileLayer = this.add.layer().setDepth(5);
+    this.fxLayer = this.add.layer().setDepth(20);
     this.selectionRing = this.add.graphics().setDepth(20);
     this.fxLayer.add(this.selectionRing);
     this.createDangerOverlay();
@@ -296,8 +296,8 @@ export class GameScene extends Phaser.Scene {
 
   private drawBackground() {
     const { width, height } = this.layout;
-    const backgroundKey = width > height ? "ui:background-wide" : "ui:background";
-    this.add.image(width / 2, height / 2, backgroundKey).setDisplaySize(width, height);
+    const background = this.add.image(width / 2, height / 2, "ui:background");
+    background.setScale(Math.max(width / background.width, height / background.height));
 
     const bg = this.add.graphics();
     bg.fillStyle(0x10071f, 0.34);
@@ -322,9 +322,17 @@ export class GameScene extends Phaser.Scene {
   private drawBoardFrame() {
     const boardPixels = BOARD_SIZE * this.layout.cell;
     const boardCenterX = this.boardX + boardPixels / 2;
+    const boardBack = this.add.graphics().setDepth(1);
+    const boardRadius = Math.max(14, Math.round(this.layout.cell * 0.22));
+    boardBack.fillStyle(0x071528, 0.96);
+    boardBack.fillRoundedRect(this.boardX, this.layout.boardY, boardPixels, boardPixels, boardRadius);
+    boardBack.lineStyle(2, 0x6f55c9, 0.22);
+    boardBack.strokeRoundedRect(this.boardX, this.layout.boardY, boardPixels, boardPixels, boardRadius);
+
     this.add
       .image(boardCenterX, this.layout.boardY + boardPixels / 2, "ui:board-frame")
-      .setDisplaySize(this.layout.boardFrameSize, this.layout.boardFrameSize);
+      .setDisplaySize(this.layout.boardFrameSize, this.layout.boardFrameSize)
+      .setDepth(9);
 
     const title = this.add.text(boardCenterX, this.layout.titleY, "99크러시", {
       fontFamily: "Arial Rounded MT Bold, Arial, sans-serif",
@@ -334,6 +342,7 @@ export class GameScene extends Phaser.Scene {
       strokeThickness: 5
     });
     title.setOrigin(0.5);
+    title.setDepth(10);
     title.setShadow(0, 5, "#00000055", 0, true, true);
   }
 

@@ -32,8 +32,7 @@ const itemAssets = [
 
 export const loadGeneratedAssets = (scene: Phaser.Scene) => {
   scene.load.image("ui:background", "/assets/ui/background-hd.png");
-  scene.load.image("ui:background-wide", "/assets/ui/start-hero.png");
-  scene.load.image("ui:board-frame", "/assets/ui/board-frame-hd.png");
+  scene.load.image("ui:board-frame", "/assets/ui/board-frame-clean-hd.png?v=frame-only-20260514");
   scene.load.image("mascot:mouse", "/assets/sprites/mascot/mouse.png");
 
   for (const kind of TILE_KINDS) {
