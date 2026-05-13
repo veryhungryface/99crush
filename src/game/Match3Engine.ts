@@ -129,6 +129,29 @@ export class Match3Engine {
       }
     }
 
+    for (let row = 0; row < this.height - 1; row++) {
+      for (let col = 0; col < this.width - 1; col++) {
+        const tile = this.board[row][col];
+        if (!tile) continue;
+        if (
+          this.board[row][col + 1]?.kind === tile.kind &&
+          this.board[row + 1][col]?.kind === tile.kind &&
+          this.board[row + 1][col + 1]?.kind === tile.kind
+        ) {
+          groups.push({
+            kind: tile.kind,
+            orientation: "square",
+            positions: [
+              { row, col },
+              { row, col: col + 1 },
+              { row: row + 1, col },
+              { row: row + 1, col: col + 1 }
+            ]
+          });
+        }
+      }
+    }
+
     return groups;
   }
 
@@ -307,8 +330,12 @@ export class Match3Engine {
         const leftB = this.board[row][col - 2];
         const upA = this.board[row - 1]?.[col];
         const upB = this.board[row - 2]?.[col];
+        const upLeft = this.board[row - 1]?.[col - 1];
         if (leftA && leftB && leftA.kind === leftB.kind) disallowed.add(leftA.kind);
         if (upA && upB && upA.kind === upB.kind) disallowed.add(upA.kind);
+        if (leftA && upA && upLeft && leftA.kind === upA.kind && upA.kind === upLeft.kind) {
+          disallowed.add(leftA.kind);
+        }
         this.board[row][col] = this.createTile(disallowed);
       }
     }
@@ -329,10 +356,13 @@ export class Match3Engine {
   }
 
   private createSpecialFromMatches(matches: MatchGroup[], anchors: Position[]): CreatedSpecial | null {
+    const specialMatches = matches.filter((match) => match.orientation !== "square");
+    if (specialMatches.length === 0) return null;
+
     const positionToOrientations = new Map<string, Set<MatchGroup["orientation"]>>();
     const positionToGroups = new Map<string, MatchGroup[]>();
 
-    for (const group of matches) {
+    for (const group of specialMatches) {
       for (const position of group.positions) {
         const key = posKey(position);
         if (!positionToOrientations.has(key)) positionToOrientations.set(key, new Set());
@@ -348,7 +378,7 @@ export class Match3Engine {
     });
 
     const anchor = anchors.find((candidate) => positionToGroups.has(posKey(candidate)));
-    const longest = [...matches].sort((a, b) => b.positions.length - a.positions.length)[0];
+    const longest = [...specialMatches].sort((a, b) => b.positions.length - a.positions.length)[0];
     if (!longest || longest.positions.length < 4) {
       const corner = allPositions.find((position) => positionToOrientations.get(posKey(position))?.size === 2);
       if (!corner) return null;

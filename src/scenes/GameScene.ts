@@ -85,6 +85,8 @@ export class GameScene extends Phaser.Scene {
   private views = new Map<number, TileView>();
   private tileLayer!: Phaser.GameObjects.Layer;
   private fxLayer!: Phaser.GameObjects.Layer;
+  private dangerOverlay!: Phaser.GameObjects.Rectangle;
+  private dangerTween: Phaser.Tweens.Tween | null = null;
   private inputZone!: Phaser.GameObjects.Zone;
   private selection: Position | null = null;
   private selectionRing!: Phaser.GameObjects.Graphics;
@@ -129,6 +131,7 @@ export class GameScene extends Phaser.Scene {
     this.fxLayer = this.add.layer();
     this.selectionRing = this.add.graphics().setDepth(20);
     this.fxLayer.add(this.selectionRing);
+    this.createDangerOverlay();
     this.inputZone = this.add
       .zone(
         this.boardX + (BOARD_SIZE * this.layout.cell) / 2,
@@ -220,6 +223,7 @@ export class GameScene extends Phaser.Scene {
     this.resetToken++;
     this.cancelActiveQuiz();
     this.pointerStarts.clear();
+    this.setDangerWarning(false);
     this.gameOverDispatched = false;
     this.busy = false;
     this.setSelection(null);
@@ -258,6 +262,7 @@ export class GameScene extends Phaser.Scene {
       this.timeLeft = nextTimeLeft;
       this.updateHud();
     }
+    this.setDangerWarning(this.timeLeft > 0 && this.timeLeft <= 5);
     if (this.timeLeft <= 0) this.finishRound();
   }
 
@@ -268,6 +273,7 @@ export class GameScene extends Phaser.Scene {
     this.cancelActiveQuiz();
     this.pointerStarts.clear();
     this.selectedBooster = null;
+    this.setDangerWarning(false);
     this.busy = true;
     this.setSelection(null);
     this.timerEvent?.remove(false);
@@ -329,6 +335,44 @@ export class GameScene extends Phaser.Scene {
     });
     title.setOrigin(0.5);
     title.setShadow(0, 5, "#00000055", 0, true, true);
+  }
+
+  private createDangerOverlay() {
+    const boardPixels = BOARD_SIZE * this.layout.cell;
+    this.dangerOverlay = this.add
+      .rectangle(
+        this.boardX + boardPixels / 2,
+        this.layout.boardY + boardPixels / 2,
+        boardPixels,
+        boardPixels,
+        0xff1537,
+        0
+      )
+      .setBlendMode(Phaser.BlendModes.NORMAL)
+      .setDepth(44);
+    this.fxLayer.add(this.dangerOverlay);
+  }
+
+  private setDangerWarning(active: boolean) {
+    if (!this.dangerOverlay) return;
+    if (active && !this.dangerTween) {
+      this.dangerOverlay.setAlpha(0.12);
+      this.dangerTween = this.tweens.add({
+        targets: this.dangerOverlay,
+        alpha: { from: 0.1, to: 0.38 },
+        duration: 240,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut"
+      });
+      return;
+    }
+
+    if (!active && this.dangerTween) {
+      this.dangerTween.stop();
+      this.dangerTween = null;
+      this.dangerOverlay.setAlpha(0);
+    }
   }
 
   private renderInitialBoard() {
@@ -713,7 +757,7 @@ export class GameScene extends Phaser.Scene {
   private async animateClear(clear: ClearResult, combo: number, turnResetToken: number) {
     if (clear.cleared.length === 0) return;
     playBurst(combo);
-    this.cameras.main.shake(95 + combo * 20, Math.min(0.004 + combo * 0.0015, 0.012));
+    this.cameras.main.shake(95 + combo * 24, Math.min(0.004 + combo * 0.0018, 0.015));
     await sleep(this, Math.min(42 + combo * 12, 90));
     if (turnResetToken !== this.resetToken) return;
 
@@ -824,9 +868,9 @@ export class GameScene extends Phaser.Scene {
     this.fxLayer.add(ring);
     this.tweens.add({
       targets: ring,
-      scale: special ? 3.2 : 2.15 + combo * 0.2,
+      scale: special ? 3.45 + combo * 0.12 : 2.15 + combo * 0.36,
       alpha: 0,
-      duration: 340,
+      duration: 340 + combo * 20,
       ease: "Cubic.easeOut",
       onComplete: () => ring.destroy()
     });
@@ -837,9 +881,9 @@ export class GameScene extends Phaser.Scene {
     this.fxLayer.add(flash);
     this.tweens.add({
       targets: flash,
-      scale: special ? 1.55 : 1.14,
+      scale: special ? 1.7 + combo * 0.1 : 1.14 + combo * 0.16,
       alpha: 0,
-      duration: 280,
+      duration: 280 + combo * 14,
       ease: "Cubic.easeOut",
       onComplete: () => flash.destroy()
     });
@@ -849,24 +893,24 @@ export class GameScene extends Phaser.Scene {
       speed: { min: 130 + combo * 18, max: 260 + combo * 42 },
       scale: { start: special ? 0.72 : 0.46, end: 0 },
       rotate: { min: 0, max: 360 },
-      quantity: special ? 26 : 14 + combo * 3,
+      quantity: special ? 28 + combo * 4 : 14 + combo * 5,
       emitting: false,
       blendMode: Phaser.BlendModes.ADD
     });
     this.fxLayer.add(particles);
-    particles.explode(special ? 32 : 18 + combo * 2);
+    particles.explode(special ? 34 + combo * 4 : 18 + combo * 4);
     this.time.delayedCall(700, () => particles.destroy());
 
     const shards = this.add.particles(world.x, world.y, "item:fragments", {
       lifespan: 460,
-      speed: { min: 70, max: 190 + combo * 24 },
+      speed: { min: 80 + combo * 8, max: 190 + combo * 36 },
       scale: { start: 0.5, end: 0 },
       rotate: { min: 0, max: 360 },
       gravityY: 360,
       emitting: false
     });
     this.fxLayer.add(shards);
-    shards.explode(special ? 20 : 8);
+    shards.explode(special ? 22 + combo * 2 : 8 + combo * 2);
     this.time.delayedCall(760, () => shards.destroy());
   }
 
@@ -887,12 +931,15 @@ export class GameScene extends Phaser.Scene {
     this.fxLayer.add(shockwave);
     this.tweens.add({
       targets: shockwave,
-      scale: 2.6 + combo * 0.38,
+      scale: 2.9 + combo * 0.58,
       alpha: 0,
-      duration: 560,
+      duration: 640,
       ease: "Cubic.easeOut",
       onComplete: () => shockwave.destroy()
     });
+
+    this.comboBoardFlash(combo);
+    this.comboLightning(center, combo, clear);
 
     const text = this.add.text(center.x, center.y - this.layout.cell * 0.45, `${label} x${combo}`, {
       fontFamily: "Arial Rounded MT Bold, Arial, sans-serif",
@@ -928,6 +975,97 @@ export class GameScene extends Phaser.Scene {
     this.fxLayer.add(particles);
     particles.explode(18 + combo * 6);
     this.time.delayedCall(900, () => particles.destroy());
+  }
+
+  private comboBoardFlash(combo: number) {
+    const boardPixels = BOARD_SIZE * this.layout.cell;
+    const flash = this.add
+      .rectangle(
+        this.boardX + boardPixels / 2,
+        this.layout.boardY + boardPixels / 2,
+        boardPixels,
+        boardPixels,
+        combo >= 4 ? 0xfff36a : 0x72efff,
+        Math.min(0.12 + combo * 0.035, 0.32)
+      )
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(54);
+    this.fxLayer.add(flash);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 440 + combo * 34,
+      ease: "Cubic.easeOut",
+      onComplete: () => flash.destroy()
+    });
+  }
+
+  private comboLightning(center: { x: number; y: number }, combo: number, clear: ClearResult) {
+    const boardPixels = BOARD_SIZE * this.layout.cell;
+    const boardLeft = this.boardX;
+    const boardTop = this.layout.boardY;
+    const boardRight = boardLeft + boardPixels;
+    const boardBottom = boardTop + boardPixels;
+    const targets = clear.cleared.length > 0
+      ? clear.cleared.map((cleared) => this.cellToWorld(cleared.position))
+      : [center];
+    const boltCount = Math.min(3 + combo, 10);
+
+    for (let index = 0; index < boltCount; index++) {
+      const edge = index % 4;
+      const start = edge === 0
+        ? { x: boardLeft, y: Phaser.Math.Between(boardTop, boardBottom) }
+        : edge === 1
+          ? { x: boardRight, y: Phaser.Math.Between(boardTop, boardBottom) }
+          : edge === 2
+            ? { x: Phaser.Math.Between(boardLeft, boardRight), y: boardTop }
+            : { x: Phaser.Math.Between(boardLeft, boardRight), y: boardBottom };
+      const end = targets[(index * 3 + combo) % targets.length] ?? center;
+      const bolt = this.add.graphics().setDepth(59);
+      this.fxLayer.add(bolt);
+      this.drawLightningBolt(bolt, start, end, combo, index);
+      this.tweens.add({
+        targets: bolt,
+        alpha: 0,
+        duration: 300 + combo * 42,
+        delay: index * 18,
+        ease: "Cubic.easeOut",
+        onComplete: () => bolt.destroy()
+      });
+    }
+  }
+
+  private drawLightningBolt(
+    graphics: Phaser.GameObjects.Graphics,
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    combo: number,
+    seed: number
+  ) {
+    const segments = 6 + Math.min(combo, 5);
+    const jitter = this.layout.cell * (0.12 + Math.min(combo, 6) * 0.025);
+    const points = Array.from({ length: segments + 1 }, (_, index) => {
+      const ratio = index / segments;
+      const wobble = index === 0 || index === segments
+        ? 0
+        : Phaser.Math.Between(-jitter, jitter) + Math.sin((seed + index) * 1.7) * jitter * 0.35;
+      return {
+        x: Phaser.Math.Linear(start.x, end.x, ratio) + wobble,
+        y: Phaser.Math.Linear(start.y, end.y, ratio) - wobble * 0.55
+      };
+    });
+
+    graphics.lineStyle(9 + combo, 0x7bf7ff, 0.22);
+    graphics.beginPath();
+    graphics.moveTo(points[0].x, points[0].y);
+    for (const point of points.slice(1)) graphics.lineTo(point.x, point.y);
+    graphics.strokePath();
+
+    graphics.lineStyle(3 + Math.min(combo, 4), combo >= 4 ? 0xfff278 : 0xffffff, 0.94);
+    graphics.beginPath();
+    graphics.moveTo(points[0].x, points[0].y);
+    for (const point of points.slice(1)) graphics.lineTo(point.x, point.y);
+    graphics.strokePath();
   }
 
   private getClearCenter(clear: ClearResult) {

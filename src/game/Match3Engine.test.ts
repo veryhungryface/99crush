@@ -21,6 +21,51 @@ describe("Match3Engine", () => {
     expect(matches.map((match) => match.orientation).sort()).toEqual(["horizontal", "vertical"]);
   });
 
+  it("detects a 2x2 square match group", () => {
+    const engine = Match3Engine.fromKinds([
+      ["blue", "blue", "green"],
+      ["blue", "blue", "yellow"],
+      ["silver", "yellow", "red"]
+    ]);
+
+    const matches = engine.findMatches();
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.orientation).toBe("square");
+    expect(matches[0]?.positions).toEqual([
+      { row: 0, col: 0 },
+      { row: 0, col: 1 },
+      { row: 1, col: 0 },
+      { row: 1, col: 1 }
+    ]);
+  });
+
+  it("clears a 2x2 square without creating a special tile", () => {
+    const engine = Match3Engine.fromKinds([
+      ["blue", "blue", "green"],
+      ["blue", "blue", "yellow"],
+      ["silver", "yellow", "red"]
+    ]);
+
+    const result = engine.clearMatches(engine.findMatches(), [{ row: 0, col: 0 }]);
+    expect(result.created).toBeNull();
+    expect(result.cleared).toHaveLength(4);
+    expect(engine.getTile({ row: 0, col: 0 })).toBeNull();
+    expect(engine.getTile({ row: 1, col: 1 })).toBeNull();
+  });
+
+  it("treats swaps that create a 2x2 square as legal moves", () => {
+    const engine = Match3Engine.fromKinds([
+      ["blue", "red", "blue"],
+      ["blue", "blue", "yellow"],
+      ["silver", "yellow", "red"]
+    ]);
+
+    expect(engine.findMatches()).toHaveLength(0);
+    expect(engine.hasAvailableMove()).toBe(true);
+    engine.swap({ row: 0, col: 1 }, { row: 0, col: 2 });
+    expect(engine.findMatches().some((match) => match.orientation === "square")).toBe(true);
+  });
+
   it("turns a four-match into a special while clearing the other tiles", () => {
     const engine = Match3Engine.fromKinds([
       ["blue", "blue", "blue", "blue"],

@@ -18,7 +18,7 @@ export interface Position {
 
 export interface MatchGroup {
   kind: TileKind;
-  orientation: "horizontal" | "vertical";
+  orientation: "horizontal" | "vertical" | "square";
   positions: Position[];
 }
 
