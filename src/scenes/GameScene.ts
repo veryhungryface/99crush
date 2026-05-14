@@ -34,7 +34,13 @@ type BoosterSelectDetail = {
 
 type ResetDetail = {
   playerId?: string;
+  roundId?: number;
   roundEndsAtMs?: number;
+};
+
+type ForceOverDetail = {
+  playerId?: string;
+  roundId?: number;
 };
 
 const BOARD_SIZE = 8;
@@ -81,6 +87,7 @@ export class GameScene extends Phaser.Scene {
   private readonly playerId: string;
   private readonly boardSeed: number;
   private readonly layout: (typeof GAME_SCENE_LAYOUTS)[GameLayoutMode];
+  private readonly roundId: number;
   private engine!: Match3Engine;
   private views = new Map<number, TileView>();
   private tileLayer!: Phaser.GameObjects.Layer;
@@ -110,12 +117,14 @@ export class GameScene extends Phaser.Scene {
     playerId = "p1",
     boardSeed = 20260512,
     layoutMode: GameLayoutMode = "portrait",
+    roundId = 1,
     roundEndsAtMs = performance.now() + ROUND_DURATION_MS
   ) {
     super(`GameScene:${playerId}:${layoutMode}`);
     this.playerId = playerId;
     this.boardSeed = boardSeed;
     this.layout = GAME_SCENE_LAYOUTS[layoutMode];
+    this.roundId = roundId;
     this.roundEndsAtMs = roundEndsAtMs;
   }
 
@@ -145,6 +154,7 @@ export class GameScene extends Phaser.Scene {
     this.input.on("pointerup", this.handlePointerUp);
     this.input.on("pointerupoutside", this.handlePointerCancel);
     window.addEventListener("game:reset", this.resetFromDom);
+    window.addEventListener("game:force-over", this.forceOverFromDom);
     window.addEventListener("booster:select", this.handleBoosterSelect);
     window.addEventListener("booster:cancel", this.handleBoosterCancel);
     window.addEventListener("game:teardown", this.teardownFromDom);
@@ -159,8 +169,17 @@ export class GameScene extends Phaser.Scene {
     if (!this.canHandleDomEvent()) return;
     const detail = (event as CustomEvent<ResetDetail>).detail;
     if (detail?.playerId && detail.playerId !== this.playerId) return;
+    if (detail?.roundId && detail.roundId !== this.roundId) return;
     this.roundEndsAtMs = detail?.roundEndsAtMs ?? performance.now() + ROUND_DURATION_MS;
     this.resetGame();
+  };
+
+  private forceOverFromDom = (event: Event) => {
+    if (!this.canHandleDomEvent()) return;
+    const detail = (event as CustomEvent<ForceOverDetail>).detail;
+    if (detail?.playerId && detail.playerId !== this.playerId) return;
+    if (detail?.roundId && detail.roundId !== this.roundId) return;
+    this.finishRound();
   };
 
   private handleBoosterSelect = (event: Event) => {
@@ -200,6 +219,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.domEventsBound) return;
     this.domEventsBound = false;
     window.removeEventListener("game:reset", this.resetFromDom);
+    window.removeEventListener("game:force-over", this.forceOverFromDom);
     window.removeEventListener("booster:select", this.handleBoosterSelect);
     window.removeEventListener("booster:cancel", this.handleBoosterCancel);
     window.removeEventListener("game:teardown", this.teardownFromDom);
@@ -288,6 +308,7 @@ export class GameScene extends Phaser.Scene {
       new CustomEvent("game:over", {
         detail: {
           playerId: this.playerId,
+          roundId: this.roundId,
           score: this.score
         }
       })
@@ -1274,6 +1295,7 @@ export class GameScene extends Phaser.Scene {
         detail: {
           score: this.score,
           playerId: this.playerId,
+          roundId: this.roundId,
           moves: this.moves,
           timeLeft: this.timeLeft,
           combo: this.lastCombo

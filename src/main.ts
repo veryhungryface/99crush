@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import "./style.css";
 import { type BoosterKind } from "./game/types";
+import { getWinningPlayerIds } from "./game/winner";
 import { GameScene, GAME_SCENE_LAYOUTS, ROUND_DURATION_MS, type GameLayoutMode } from "./scenes/GameScene";
 
 const PLAYER_OPTIONS = [1, 2, 3, 4] as const;
@@ -22,6 +23,7 @@ type BoosterInventory = Record<BoosterKind, number>;
 
 type HudDetail = {
   playerId: PlayerId;
+  roundId: number;
   score: number;
   moves: number;
   combo: number;
@@ -46,6 +48,7 @@ type QuizShowDetail = {
 
 type GameOverDetail = {
   playerId: PlayerId;
+  roundId: number;
   score: number;
 };
 
@@ -65,7 +68,9 @@ let currentPlayerCount: PlayerCount | null = null;
 let currentLayoutMode: GameLayoutMode | null = null;
 let viewportRefreshTimer: number | null = null;
 let winAnnounced = false;
-let winAnnounceTimer: number | null = null;
+let currentRoundId = 0;
+let roundForceTimer: number | null = null;
+let roundWinnerTimer: number | null = null;
 
 const formatTime = (seconds: number) => {
   const safeSeconds = Math.max(0, seconds);
@@ -170,14 +175,34 @@ const setArmedBooster = (playerId: PlayerId, kind: BoosterKind | null) => {
 
 const clearWinState = () => {
   winAnnounced = false;
-  if (winAnnounceTimer) window.clearTimeout(winAnnounceTimer);
-  winAnnounceTimer = null;
   finishedPlayers.clear();
   document.querySelectorAll<HTMLElement>(".game-card").forEach((card) => {
     card.classList.remove("winner", "round-ended", "not-winner");
     const ribbon = card.querySelector<HTMLElement>(".win-ribbon");
     if (ribbon) ribbon.hidden = true;
   });
+};
+
+const clearRoundTimers = () => {
+  if (roundForceTimer) window.clearTimeout(roundForceTimer);
+  if (roundWinnerTimer) window.clearTimeout(roundWinnerTimer);
+  roundForceTimer = null;
+  roundWinnerTimer = null;
+};
+
+const scheduleRoundEndGuard = (roundId: number, roundEndsAtMs: number) => {
+  clearRoundTimers();
+  const forceDelay = Math.max(0, roundEndsAtMs - performance.now() + 350);
+  roundForceTimer = window.setTimeout(() => {
+    roundForceTimer = null;
+    if (roundId !== currentRoundId || arena?.hidden) return;
+    window.dispatchEvent(new CustomEvent("game:force-over", { detail: { roundId } }));
+
+    roundWinnerTimer = window.setTimeout(() => {
+      roundWinnerTimer = null;
+      showWinners(roundId);
+    }, 850);
+  }, forceDelay);
 };
 
 const updateBoosterButtons = (playerId: PlayerId) => {
@@ -270,6 +295,7 @@ const createGame = (
   parent: HTMLElement,
   index: number,
   layoutMode: GameLayoutMode,
+  roundId: number,
   roundEndsAtMs: number
 ) => {
   const layout = GAME_SCENE_LAYOUTS[layoutMode];
@@ -297,11 +323,12 @@ const createGame = (
       pixelArt: false,
       roundPixels: false
     },
-    scene: [new GameScene(playerId, 20260512 + index * 101, layoutMode, roundEndsAtMs)]
+    scene: [new GameScene(playerId, 20260512 + index * 101, layoutMode, roundId, roundEndsAtMs)]
   });
 };
 
 const destroyGames = () => {
+  clearRoundTimers();
   window.dispatchEvent(new CustomEvent("game:teardown"));
   for (const game of games.values()) game.destroy(true);
   games.clear();
@@ -310,8 +337,6 @@ const destroyGames = () => {
   boosterInventories.clear();
   playerScores.clear();
   finishedPlayers.clear();
-  if (winAnnounceTimer) window.clearTimeout(winAnnounceTimer);
-  winAnnounceTimer = null;
   winAnnounced = false;
 };
 
@@ -324,12 +349,14 @@ const startGame = (playerCount: PlayerCount) => {
   clearWinState();
   currentPlayerCount = actualPlayerCount;
   currentLayoutMode = layoutMode;
+  const roundId = ++currentRoundId;
   arena.dataset.players = String(actualPlayerCount);
   arena.dataset.layout = layoutMode;
   startScreen.hidden = true;
   arena.hidden = false;
   playBgm();
   const roundEndsAtMs = performance.now() + getRoundDurationMs();
+  scheduleRoundEndGuard(roundId, roundEndsAtMs);
 
   for (let index = 0; index < actualPlayerCount; index++) {
     const playerId = `p${index + 1}` as PlayerId;
@@ -340,7 +367,7 @@ const startGame = (playerCount: PlayerCount) => {
     arena.append(card);
     updateBoosterButtons(playerId);
     const root = card.querySelector<HTMLElement>(".game-root");
-    if (root) games.set(playerId, createGame(playerId, root, index, layoutMode, roundEndsAtMs));
+    if (root) games.set(playerId, createGame(playerId, root, index, layoutMode, roundId, roundEndsAtMs));
   }
 
   refreshActiveGames();
@@ -389,6 +416,7 @@ muteToggle?.addEventListener("click", () => {
 window.addEventListener("hud:update", (event) => {
   const detail = (event as CustomEvent<HudDetail>).detail;
   if (!detail) return;
+  if (detail.roundId !== currentRoundId) return;
   const card = getPlayerCard(detail.playerId);
   if (!card) return;
 
@@ -407,16 +435,16 @@ window.addEventListener("hud:update", (event) => {
   if (comboFill) comboFill.style.width = `${Math.min(100, detail.combo * 22)}%`;
 });
 
-const showWinners = () => {
-  if (winAnnounced || games.size === 0) return;
+const showWinners = (roundId = currentRoundId) => {
+  if (roundId !== currentRoundId || winAnnounced || games.size === 0) return;
   winAnnounced = true;
+  clearRoundTimers();
 
   const entries = [...games.keys()].map((playerId) => ({
     playerId,
     score: playerScores.get(playerId) ?? 0
   }));
-  const highScore = Math.max(...entries.map((entry) => entry.score));
-  const winners = new Set(entries.filter((entry) => entry.score === highScore).map((entry) => entry.playerId));
+  const winners = getWinningPlayerIds(entries);
 
   entries.forEach(({ playerId }) => {
     const card = getPlayerCard(playerId);
@@ -433,19 +461,13 @@ const showWinners = () => {
 window.addEventListener("game:over", (event) => {
   const detail = (event as CustomEvent<GameOverDetail>).detail;
   if (!detail) return;
+  if (detail.roundId !== currentRoundId) return;
   playerScores.set(detail.playerId, detail.score);
   finishedPlayers.add(detail.playerId);
 
   if (finishedPlayers.size >= games.size) {
-    showWinners();
+    showWinners(detail.roundId);
     return;
-  }
-
-  if (!winAnnounceTimer) {
-    winAnnounceTimer = window.setTimeout(() => {
-      winAnnounceTimer = null;
-      showWinners();
-    }, 700);
   }
 });
 
@@ -547,6 +569,7 @@ arena?.addEventListener("click", (event) => {
         new CustomEvent("game:reset", {
           detail: {
             playerId,
+            roundId: currentRoundId,
             roundEndsAtMs: performance.now() + getRoundDurationMs()
           }
         })
