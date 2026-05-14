@@ -6,13 +6,14 @@ import { GameScene, GAME_SCENE_LAYOUTS, ROUND_DURATION_MS, type GameLayoutMode }
 
 const PLAYER_OPTIONS = [1, 2, 3, 4] as const;
 const BOOSTERS = [
-  { kind: "bomb", label: "폭탄 아이템", icon: "bomb", count: 3 },
-  { kind: "rocket", label: "로켓 아이템", icon: "rocket", count: 3 },
-  { kind: "rainbow", label: "무지개 아이템", icon: "rainbow", count: 1 },
-  { kind: "shuffle", label: "셔플 아이템", icon: "shuffle", count: 2 }
+  { kind: "bomb", label: "폭탄 아이템", shortLabel: "폭탄", icon: "bomb", count: 3 },
+  { kind: "rocket", label: "로켓 아이템", shortLabel: "줄삭제", icon: "rocket", count: 3 },
+  { kind: "rainbow", label: "무지개 아이템", shortLabel: "색삭제", icon: "rainbow", count: 1 },
+  { kind: "shuffle", label: "셔플 아이템", shortLabel: "재배열", icon: "shuffle", count: 2 }
 ] as const satisfies ReadonlyArray<{
   kind: BoosterKind;
   label: string;
+  shortLabel: string;
   icon: string;
   count: number;
 }>;
@@ -235,7 +236,7 @@ const createPlayerCard = (playerId: PlayerId) => {
     <div class="player-stats" aria-live="polite">
       <div class="player-badge">${playerLabel(playerId)}</div>
       <div class="stat-card score-card">
-        <img src="/assets/sprites/items/star.png" alt="" />
+        <img src="/assets/sprites/items/coin.png" alt="" />
         <span class="hud-label">Score</span>
         <strong data-stat="score">0</strong>
       </div>
@@ -249,7 +250,7 @@ const createPlayerCard = (playerId: PlayerId) => {
         <span class="hud-label">Moves</span>
         <strong data-stat="moves">30</strong>
       </div>
-      <button class="reset-button" type="button" aria-label="${playerLabel(playerId)} 새 게임">
+      <button class="reset-button" type="button" aria-label="처음 화면으로">
         <span></span>
       </button>
     </div>
@@ -273,6 +274,7 @@ const createPlayerCard = (playerId: PlayerId) => {
           (booster) => `
             <button class="booster" type="button" data-booster="${booster.kind}" aria-label="${booster.label}" aria-pressed="false">
               <img src="/assets/sprites/items/${booster.icon}.png" alt="" />
+              <span class="booster-label">${booster.shortLabel}</span>
               <b>${booster.count}</b>
             </button>
           `
@@ -305,7 +307,7 @@ const createGame = (
     backgroundColor: "#17112d",
     scale: {
       mode: Phaser.Scale.FIT,
-      autoCenter: layoutMode === "portrait" ? Phaser.Scale.CENTER_HORIZONTALLY : Phaser.Scale.CENTER_BOTH,
+      autoCenter: Phaser.Scale.NO_CENTER,
       width: layout.width,
       height: layout.height
     },
@@ -371,6 +373,19 @@ const startGame = (playerCount: PlayerCount) => {
   }
 
   refreshActiveGames();
+};
+
+const returnToStartScreen = () => {
+  if (!arena || !startScreen) return;
+  destroyGames();
+  currentPlayerCount = null;
+  currentLayoutMode = null;
+  arena.replaceChildren();
+  arena.hidden = true;
+  startScreen.hidden = false;
+  updatePlayerModeButtons();
+  bgm?.pause();
+  if (muteToggle) muteToggle.hidden = true;
 };
 
 document.querySelectorAll<HTMLButtonElement>("[data-player-count]").forEach((button) => {
@@ -488,15 +503,14 @@ const positionQuizBubble = (detail: QuizShowDetail, card: HTMLElement) => {
   const left = clamp(anchorX, bubbleWidth / 2 + 8, cardRect.width - bubbleWidth / 2 - 8);
   const topHudReserve = Math.min(68, cardRect.height * 0.14);
   const bottomReserve = Math.min(108, cardRect.height * 0.2);
-  const hasRoomAbove = anchorY - bubbleHeight - 18 > topHudReserve;
-  const top = hasRoomAbove
-    ? anchorY - 10
-    : clamp(anchorY + 16, topHudReserve, cardRect.height - bubbleHeight - bottomReserve);
+  const minTop = topHudReserve + bubbleHeight + 12;
+  const maxTop = Math.max(minTop, cardRect.height - bottomReserve + 12);
+  const top = clamp(anchorY - 10, minTop, maxTop);
 
   quiz.style.setProperty("--quiz-left", `${left}px`);
   quiz.style.setProperty("--quiz-top", `${top}px`);
   quiz.style.setProperty("--quiz-width", `${bubbleWidth}px`);
-  quiz.dataset.placement = hasRoomAbove ? "above" : "below";
+  quiz.dataset.placement = "above";
 };
 
 window.addEventListener("quiz:show", (event) => {
@@ -555,26 +569,7 @@ arena?.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
   const resetButton = target.closest<HTMLButtonElement>(".reset-button");
   if (resetButton) {
-    const playerId = resetButton.closest<HTMLElement>(".game-card")?.dataset.playerId as PlayerId | undefined;
-    if (playerId) {
-      const card = getPlayerCard(playerId);
-      card?.classList.remove("winner", "round-ended", "not-winner");
-      const ribbon = card?.querySelector<HTMLElement>(".win-ribbon");
-      if (ribbon) ribbon.hidden = true;
-      finishedPlayers.delete(playerId);
-      playerScores.set(playerId, 0);
-      boosterInventories.set(playerId, createBoosterInventory());
-      setArmedBooster(playerId, null);
-      window.dispatchEvent(
-        new CustomEvent("game:reset", {
-          detail: {
-            playerId,
-            roundId: currentRoundId,
-            roundEndsAtMs: performance.now() + getRoundDurationMs()
-          }
-        })
-      );
-    }
+    returnToStartScreen();
     return;
   }
 

@@ -417,7 +417,8 @@ export class GameScene extends Phaser.Scene {
   private createTileView(tile: Tile, from: Position, to: Position, intro = false): TileView {
     const { x, y } = this.cellToWorld(from);
     const base = this.add.image(0, 0, textureKey(tile.kind));
-    base.setDisplaySize(this.layout.cell * 0.9, this.layout.cell * 0.9);
+    base.setDisplaySize(this.layout.cell * 0.84, this.layout.cell * 0.84);
+    if (tile.kind === "red") base.setY(this.layout.cell * 0.02);
     const container = this.add.container(x, y, [base]);
     container.setSize(this.layout.cell, this.layout.cell);
 
