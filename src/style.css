@@ -329,6 +329,8 @@ body {
 
 .win-ribbon span {
   display: block;
+  box-sizing: border-box;
+  max-width: calc(100% - 40px);
   padding: 0.08em 0.28em 0.16em;
   border: 6px solid rgba(255, 255, 255, 0.92);
   border-radius: 28px;
@@ -369,12 +371,11 @@ body {
   left: 10px;
   right: 10px;
   display: grid;
-  grid-template-columns: auto repeat(3, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 8px;
   align-items: center;
 }
 
-.player-badge,
 .stat-card,
 .reset-button,
 .player-tools {
@@ -383,20 +384,6 @@ body {
     inset 0 2px 0 rgba(255, 255, 255, 0.18),
     inset 0 -4px 0 rgba(0, 0, 0, 0.16),
     0 8px 14px rgba(25, 9, 64, 0.2);
-}
-
-.player-badge {
-  display: grid;
-  width: 52px;
-  min-height: 52px;
-  place-items: center;
-  border-radius: 16px;
-  background: linear-gradient(180deg, #ffe977, #ff83c6);
-  color: #6727ae;
-  font-size: 20px;
-  font-weight: 950;
-  line-height: 1;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.48);
 }
 
 .stat-card {
@@ -634,8 +621,6 @@ body {
   gap: 6px;
 }
 
-#arena[data-players="3"] .player-badge,
-#arena[data-players="4"] .player-badge,
 #arena[data-players="3"] .reset-button,
 #arena[data-players="4"] .reset-button {
   width: 44px;
@@ -675,6 +660,40 @@ body {
 #arena[data-players="4"] .score-card strong {
   margin-top: 3px;
   font-size: 17px;
+}
+
+#arena[data-players="2"] .win-ribbon span {
+  max-width: calc(100% - 54px);
+  font-size: clamp(82px, 11vw, 150px);
+}
+
+#arena[data-players="3"] .win-ribbon span,
+#arena[data-players="4"] .win-ribbon span {
+  max-width: calc(100% - 42px);
+  border-width: 5px;
+  border-radius: 22px;
+  font-size: clamp(72px, 8vw, 128px);
+}
+
+#arena[data-players="2"]:not([hidden]) + .audio-toggle,
+#arena[data-players="3"]:not([hidden]) + .audio-toggle,
+#arena[data-players="4"]:not([hidden]) + .audio-toggle {
+  width: 54px;
+  min-width: 54px;
+  min-height: 44px;
+  grid-template-columns: 1fr;
+  gap: 0;
+  padding: 0;
+}
+
+#arena[data-players="2"]:not([hidden]) + .audio-toggle strong,
+#arena[data-players="3"]:not([hidden]) + .audio-toggle strong,
+#arena[data-players="4"]:not([hidden]) + .audio-toggle strong {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
 }
 
 #arena[data-players="3"] .player-tools,
@@ -1003,7 +1022,6 @@ body {
     gap: 5px;
   }
 
-  .player-badge,
   .reset-button {
     width: 38px;
     min-height: 38px;

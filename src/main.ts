@@ -249,7 +249,6 @@ const createPlayerCard = (playerId: PlayerId) => {
   card.dataset.playerId = playerId;
   card.innerHTML = `
     <div class="player-stats" aria-live="polite">
-      <div class="player-badge">${playerLabel(playerId)}</div>
       <div class="stat-card score-card">
         <img src="/assets/sprites/items/coin.png" alt="" />
         <span class="hud-label">Score</span>
