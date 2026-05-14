@@ -45,6 +45,8 @@ type ForceOverDetail = {
 
 const BOARD_SIZE = 8;
 const STARTING_TIME = 90;
+const WRONG_ANSWER_LOCK_MS = 2000;
+const WRONG_ANSWER_SCORE_PENALTY = 300;
 export const ROUND_DURATION_MS = STARTING_TIME * 1000;
 
 export type GameLayoutMode = "portrait" | "wide" | "mobile";
@@ -100,7 +102,7 @@ export class GameScene extends Phaser.Scene {
   private pointerStarts = new Map<number, PointerStart>();
   private busy = false;
   private score = 0;
-  private moves = 30;
+  private correctAnswers = 0;
   private timeLeft = STARTING_TIME;
   private lastCombo = 0;
   private timerEvent: Phaser.Time.TimerEvent | null = null;
@@ -249,7 +251,7 @@ export class GameScene extends Phaser.Scene {
     this.setSelection(null);
     this.selectedBooster = null;
     this.score = 0;
-    this.moves = 30;
+    this.correctAnswers = 0;
     this.timeLeft = this.computeTimeLeft();
     this.lastCombo = 0;
     this.timerEvent?.remove(false);
@@ -591,7 +593,6 @@ export class GameScene extends Phaser.Scene {
   private async trySwap(first: Position, second: Position) {
     if (
       this.busy ||
-      this.moves <= 0 ||
       this.timeLeft <= 0 ||
       this.gameOverDispatched ||
       !this.engine.areAdjacent(first, second)
@@ -622,14 +623,13 @@ export class GameScene extends Phaser.Scene {
         this.engine.swap(first, second);
         await this.animateSwap(first, second, true);
         if (turnResetToken !== this.resetToken) return;
-        this.invalidNudge(first);
-        this.showToast("TRY AGAIN!");
+        await this.applyWrongAnswerPenalty(first, turnResetToken);
         return;
       }
 
       this.quizSparkAt(quizAnchor);
       this.showToast("CORRECT!");
-      this.moves = Math.max(0, this.moves - 1);
+      this.correctAnswers++;
       if (hasSwapSpecial) {
         const specialClear = this.engine.clearSwapSpecial(first, second);
         if (!specialClear) return;
@@ -1216,6 +1216,29 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  private async applyWrongAnswerPenalty(position: Position, turnResetToken: number) {
+    this.score = Math.max(0, this.score - WRONG_ANSWER_SCORE_PENALTY);
+    this.updateHud();
+    this.invalidNudge(position);
+    this.showToast(`MISS -${WRONG_ANSWER_SCORE_PENALTY}`);
+
+    const warning = this.add.rectangle(0, 0, this.layout.width, this.layout.height, 0xff315d, 0.22);
+    warning.setOrigin(0);
+    warning.setDepth(49);
+    warning.setBlendMode(Phaser.BlendModes.ADD);
+    this.fxLayer.add(warning);
+    this.tweens.add({
+      targets: warning,
+      alpha: 0,
+      duration: 520,
+      ease: "Sine.easeOut",
+      onComplete: () => warning.destroy()
+    });
+
+    await sleep(this, WRONG_ANSWER_LOCK_MS);
+    if (turnResetToken !== this.resetToken || this.gameOverDispatched) return;
+  }
+
   private setSelection(position: Position | null) {
     this.selection = position;
     this.selectionRing.clear();
@@ -1297,7 +1320,7 @@ export class GameScene extends Phaser.Scene {
           score: this.score,
           playerId: this.playerId,
           roundId: this.roundId,
-          moves: this.moves,
+          moves: this.correctAnswers,
           timeLeft: this.timeLeft,
           combo: this.lastCombo
         }

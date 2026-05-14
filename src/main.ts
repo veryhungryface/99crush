@@ -63,7 +63,7 @@ const activeBoosters = new Map<PlayerId, BoosterKind | null>();
 const boosterInventories = new Map<PlayerId, BoosterInventory>();
 const playerScores = new Map<PlayerId, number>();
 const finishedPlayers = new Set<PlayerId>();
-const mobileViewportQuery = window.matchMedia("(max-width: 760px), (pointer: coarse) and (max-height: 760px)");
+const coarsePointerQuery = window.matchMedia("(pointer: coarse)");
 let bgmMuted = window.localStorage.getItem("99crush:bgm-muted") === "true";
 let currentPlayerCount: PlayerCount | null = null;
 let currentLayoutMode: GameLayoutMode | null = null;
@@ -97,13 +97,28 @@ const getRoundDurationMs = () => {
 const getPlayerCard = (playerId: PlayerId) =>
   arena?.querySelector<HTMLElement>(`.game-card[data-player-id="${playerId}"]`) ?? null;
 
-const isMobileViewport = () => mobileViewportQuery.matches;
+const getViewportSize = () => ({
+  width: window.innerWidth || document.documentElement.clientWidth,
+  height: window.innerHeight || document.documentElement.clientHeight
+});
+
+const isPhoneViewport = () => {
+  const { width, height } = getViewportSize();
+  const shortSide = Math.min(width, height);
+  const longSide = Math.max(width, height);
+  return coarsePointerQuery.matches && (shortSide < 700 || longSide < 860);
+};
+
+const isLandscapeViewport = () => {
+  const { width, height } = getViewportSize();
+  return width > height;
+};
 
 const normalizePlayerCount = (playerCount: PlayerCount): PlayerCount =>
-  isMobileViewport() ? 1 : playerCount;
+  isPhoneViewport() ? 1 : playerCount;
 
 const getLayoutMode = (playerCount: PlayerCount): GameLayoutMode => {
-  if (isMobileViewport()) return "mobile";
+  if (isPhoneViewport()) return isLandscapeViewport() ? "wide" : "mobile";
   return playerCount === 1 ? "wide" : "portrait";
 };
 
@@ -114,13 +129,13 @@ const refreshActiveGames = () => {
 };
 
 const updatePlayerModeButtons = () => {
-  const mobile = isMobileViewport();
-  document.documentElement.dataset.mobile = mobile ? "true" : "false";
-  if (startScreen) startScreen.dataset.mobile = mobile ? "true" : "false";
+  const phone = isPhoneViewport();
+  document.documentElement.dataset.mobile = phone ? "true" : "false";
+  if (startScreen) startScreen.dataset.mobile = phone ? "true" : "false";
 
   document.querySelectorAll<HTMLButtonElement>("[data-player-count]").forEach((button) => {
     const playerCount = Number(button.dataset.playerCount);
-    const mobileBlocked = mobile && playerCount !== 1;
+    const mobileBlocked = phone && playerCount !== 1;
     button.disabled = mobileBlocked;
     button.hidden = mobileBlocked;
     button.setAttribute("aria-hidden", mobileBlocked ? "true" : "false");
@@ -246,9 +261,9 @@ const createPlayerCard = (playerId: PlayerId) => {
         <strong data-stat="time">1:30</strong>
       </div>
       <div class="stat-card">
-        <img src="/assets/sprites/items/lightning.png" alt="" />
-        <span class="hud-label">Moves</span>
-        <strong data-stat="moves">30</strong>
+        <img src="/assets/sprites/items/star.png" alt="" />
+        <span class="hud-label">Correct</span>
+        <strong data-stat="moves">0</strong>
       </div>
       <button class="reset-button" type="button" aria-label="처음 화면으로">
         <span></span>
@@ -418,7 +433,7 @@ const scheduleViewportRefresh = () => {
 };
 
 window.addEventListener("resize", scheduleViewportRefresh);
-mobileViewportQuery.addEventListener("change", scheduleViewportRefresh);
+coarsePointerQuery.addEventListener("change", scheduleViewportRefresh);
 
 muteToggle?.addEventListener("click", () => {
   bgmMuted = !bgmMuted;
@@ -454,6 +469,7 @@ const showWinners = (roundId = currentRoundId) => {
   if (roundId !== currentRoundId || winAnnounced || games.size === 0) return;
   winAnnounced = true;
   clearRoundTimers();
+  if (games.size < 2) return;
 
   const entries = [...games.keys()].map((playerId) => ({
     playerId,
